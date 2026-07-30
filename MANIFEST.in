@@ -1,0 +1,19 @@
+# Files to include in the PyPI source distribution (sdist).
+# The wheel is built from the `do_attribution` package only.
+
+include LICENSE
+include README.md
+include requirements.txt
+include pyproject.toml
+include setup.py
+
+recursive-include tests *.py
+recursive-include examples *.ipynb *.csv *.py
+recursive-include examples/images *.png
+recursive-include docs *.md
+
+# Never ship cruft.
+global-exclude .DS_Store
+global-exclude __pycache__
+global-exclude *.py[cod]
+global-exclude *.so
