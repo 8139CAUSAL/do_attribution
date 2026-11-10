@@ -40,6 +40,8 @@ class CompareAttribution:
         rather than a real channel.  Forwarded to both sub-models so they
         strip the endpoint tokens before any attribution math.  See
         :class:`do_attribution.base.BaseAttribution` for full semantics.
+    shapley_characteristic_function : {'cumulative', 'exact'}, default='cumulative'
+        Coalition game forwarded to :class:`ShapleyAttribution`.
     """
 
     def __init__(
@@ -49,6 +51,7 @@ class CompareAttribution:
         separator: str = DEFAULT_SEPARATOR,
         extra_models: Optional[Dict[str, BaseAttribution]] = None,
         conversion_labels: Optional[Iterable[str]] = None,  # MODIFIED: P0.
+        shapley_characteristic_function: str = "cumulative",
     ) -> None:
         self.separator = separator
         # MODIFIED (P0): store conversion_labels so both extract_channels()
@@ -66,6 +69,7 @@ class CompareAttribution:
         self.shapley = ShapleyAttribution(
             separator=separator,
             conversion_labels=conversion_labels,  # MODIFIED: P0 forward.
+            characteristic_function=shapley_characteristic_function,
         )
         self.extra_models: Dict[str, BaseAttribution] = dict(extra_models or {})
 

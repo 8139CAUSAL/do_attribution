@@ -465,7 +465,9 @@ def test_fit_by_epoch_rejects_mapping_freq(cls):
 def test_shapley_lazy_global_fit_succeeds_under_mixed_freq(mixed_year_data):
     paths, timestamps, convs = mixed_year_data
     model = TemporalShapleyAttribution(
-        freq={2024: "Q", 2025: "M"}, min_samples_per_epoch=5
+        freq={2024: "Q", 2025: "M"},
+        min_samples_per_epoch=5,
+        characteristic_function="exact",
     )
     model.fit(paths, timestamps, convs)
     # Triggers the lazy global fit. The static fit consumes raw paths

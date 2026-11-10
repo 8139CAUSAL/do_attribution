@@ -51,7 +51,11 @@ def test_installed_package_contract() -> None:
         ["Email", "Email > Search", "Email > Search"],
         [1, 1, 1],
     )
-    assert result["attribution"] == {"Email": 0.75, "Search": 0.25}
+    # Default cumulative game: the Email-only conversion goes to Email and
+    # each Email > Search conversion is split equally, so the three
+    # conversions are allocated 2 to Email and 1 to Search.
+    assert result["shapley_values"] == {"Email": 2.0, "Search": 1.0}
+    assert result["attribution"] == {"Email": 2 / 3, "Search": 1 / 3}
 
     for forbidden_prefix in sys.argv[1:]:
         assert not package_path.is_relative_to(Path(forbidden_prefix).resolve())

@@ -23,7 +23,7 @@ allocation models:
 - an **absorbing-Markov-chain removal-effect** model
   (`MarkovAttribution`, orders 1+, four removal strategies), and
 - a **cooperative-game Shapley-value** model (`ShapleyAttribution`, exact
-  factorial weights over the observed coalition lattice).
+  Shapley values of a coalition game built from the observed channel sets).
 
 The calibration layer applies caller-supplied lift-test evidence after a
 static or temporal attribution fit. Direct adjustments to tested entities,
@@ -58,11 +58,15 @@ chronological epochs.
   `"fail_refit"` (signed effects), `"detour"` (signed effects), or
   `"redirect_to_null"` — four operational meanings of "remove this channel",
   selected explicitly instead of implied.
-- **Exact Shapley values.** Per-channel values use the exact factorial weight
-  `w(s, n) = s!·(n−s−1)!/n!`. Raw signed values and the coalition value
-  function are always returned; normalized shares are returned when the raw
-  values admit a valid share vector, and reported as unavailable when they
-  do not.
+- **Exact Shapley values.** The default cumulative coalition game credits a
+  coalition with every conversion on journeys whose channels it contains, so
+  the Shapley values are a non-negative allocation of all observed
+  conversions. They are exact — no sampling — and equal the factorial-weight
+  definition `w(s, n) = s!·(n−s−1)!/n!`. Raw values and the observed
+  coalition table are always returned; normalized shares are returned when
+  the raw values admit a valid share vector, and reported as unavailable
+  when they do not. The legacy exact-set game remains available through
+  `characteristic_function="exact"`.
 - **Conservation and contract guarantees.** When normalized attribution is
   available its shares are finite, lie on `[0, 1]`, and sum to 1, and
   attributed conversions conserve the observed total. When it is not,
@@ -187,27 +191,27 @@ Removal effects (raw, signed) vs normalized shares
 +---------+----------------+--------+
 ```
 
-The Shapley model is a drop-in alternative on the same inputs. Note that
-`attribution` may be `None` — always check before indexing it:
+The Shapley model is a drop-in alternative on the same inputs:
 
 ```python
 from do_attribution import ShapleyAttribution
 
 shapley = ShapleyAttribution(conversion_labels=["Purchase"]).fit(journeys, conversions)
 
-if shapley["attribution"] is None:
-    print(shapley["normalization_status"], shapley["normalization_reason"])
-    # unavailable near_cancellation
-    print({ch: round(v, 4) for ch, v in shapley["shapley_values"].items()})
-    # {'Direct': -0.5833, 'Email': 0.25, 'Search': -0.0833, 'Social': 0.4167}
-else:
-    print({ch: round(share, 4) for ch, share in shapley["attribution"].items()})
+print(shapley["normalization_status"])
+# available
+print({ch: round(share, 4) for ch, share in shapley["attribution"].items()})
+# {'Direct': 0.1429, 'Email': 0.3095, 'Search': 0.1667, 'Social': 0.381}
+print({ch: round(v, 4) for ch, v in shapley["shapley_values"].items()})
+# {'Direct': 1.0, 'Email': 2.1667, 'Search': 1.1667, 'Social': 2.6667}
 ```
 
-On this dataset no journey touches all four channels, so `v(N) = 0`, the raw
-values cancel to float residue, and no valid share vector exists. The model
-reports that rather than dividing by the residue. The raw signed values are
-still returned — they are diagnostics on the game's own scale, not shares.
+Each converting journey splits its conversion equally among the distinct
+channels it touched, so the raw values sum to the seven observed conversions
+and the shares are those values divided by seven. `attribution` is `None`
+when normalization is unavailable — for the default game, only when no
+conversion can be credited to a channel — so code that must handle that case
+should check `normalization_status` before indexing it.
 
 Lists, NumPy arrays, and pandas Series all work as path and conversion
 inputs.
@@ -390,36 +394,64 @@ paths are left-padded with `START`. `fit` returns `attribution`,
 
 ### Shapley coalition attribution
 
-`ShapleyAttribution` uses the value function *v(S) = conversions on paths
-whose unique channel set is exactly S* and exact factorial weights. `fit`
-returns `attribution`, raw signed `shapley_values`, and the observed
-`value_function`:
+`ShapleyAttribution` builds a coalition game from the observed coalition
+table *R(T) = conversions on paths whose unique channel set is exactly T*,
+which `fit` returns as `value_function` alongside `attribution` and the raw
+`shapley_values`:
 
 ```python
 shapley["value_function"]
 # {('Email', 'Social'): 2, ('Email', 'Search'): 1, ('Social',): 1, ...}
 ```
 
-Raw signed `shapley_values` and normalized `attribution` are **separate
-outputs with separate contracts**:
+`characteristic_function=` selects the game *v* the Shapley values are
+computed on:
+
+| Game | *v(S)* | Efficiency: the raw values sum to | Raw values |
+| --- | --- | --- | --- |
+| `"cumulative"` (default) | Conversions on paths whose channel set is contained in *S*: the sum of *R(T)* over observed *T ⊆ S*. | Every observed conversion. | Non-negative. Each path splits its conversion equally among its distinct channels: `phi_i = Σ R(T) / |T|` over the coalitions *T* containing *i*. |
+| `"exact"` (legacy) | *R(S)*: conversions on paths whose channel set is exactly *S*. | The conversions on paths that touch every channel, `v(N)`. | Signed. |
+
+The cumulative game is monotone and its grand coalition is worth the total
+number of conversions, so its Shapley values are an allocation of the
+conversions that were actually observed. The closed form above is exactly
+the factorial-weight Shapley definition applied to that game; it is
+evaluated in one pass over the observed coalitions rather than over the
+`2^n` coalition lattice.
+
+Raw `shapley_values` and normalized `attribution` are **separate outputs
+with separate contracts**:
 
 | Output | Contract |
 | --- | --- |
-| `shapley_values` | Always present. Signed, on the game's own scale. Not shares, percentages, or probabilities. |
+| `shapley_values` | Always present, on the game's own scale (conversions), never rescaled. Under `"cumulative"` they are non-negative and sum to the observed conversions. Under `"exact"` they are signed diagnostics — not shares, percentages, or probabilities. |
 | `attribution` | A share mapping when available, otherwise `None`. Every value is finite and in `[0, 1]`, and the values sum to 1. |
 
-Because no journey may touch every channel, the efficiency axiom forces the
-raw values to sum to `v(N) = 0` by construction. Dividing by that float
-residue produces numerically explosive output, so normalization is refused
-instead: `attribution` is `None`, a warning is emitted, and the fit still
-succeeds with its raw values and diagnostics intact.
+```python
+shapley["characteristic_function"]   # 'cumulative'
+shapley["normalization_status"]      # 'available'
+shapley["raw_sum"]                   # 7.0 — the observed conversions
+shapley["cancellation_ratio"]        # 1.0
+```
+
+Under the legacy game, when no journey touches every channel the efficiency
+axiom forces the raw values to sum to `v(N) = 0` by construction. Dividing
+by that float residue produces numerically explosive output, so
+normalization is refused instead: `attribution` is `None`, a warning is
+emitted, and the fit still succeeds with its raw values and diagnostics
+intact.
 
 ```python
-shapley["normalization_status"]      # 'available' | 'unavailable'
-shapley["normalization_reason"]      # e.g. 'near_cancellation'
-shapley["raw_sum"]                   # ~1e-17 — float residue, not a real total
-shapley["raw_magnitude"]             # 1.3333
-shapley["cancellation_ratio"]        # ~1e-17 — far below the 1e-12 threshold
+legacy = ShapleyAttribution(
+    conversion_labels=["Purchase"], characteristic_function="exact"
+).fit(journeys, conversions)
+
+legacy["normalization_status"]       # 'unavailable'
+legacy["normalization_reason"]       # 'near_cancellation'
+legacy["shapley_values"]             # {'Direct': -0.5833, 'Email': 0.25, 'Search': -0.0833, 'Social': 0.4167}
+legacy["raw_sum"]                    # ~1e-17 — float residue, not a real total
+legacy["raw_magnitude"]              # 1.3333
+legacy["cancellation_ratio"]         # ~1e-17 — far below the 1e-12 threshold
 ```
 
 The exact residue in `raw_sum` is not reproducible across summation orders,
@@ -443,14 +475,18 @@ from do_attribution import CompareAttribution
 comparison = CompareAttribution(conversion_labels=["Purchase"])
 comparison.fit(journeys, conversions)
 
-comparison.attribution_frame()      #           markov  shapley
-                                    # Direct  0.026316      NaN
-                                    # Email   0.394737      NaN
-                                    # Search  0.201754      NaN
-                                    # Social  0.377193      NaN
-comparison.unavailable_models()     # {'shapley': 'near_cancellation'}
+comparison.attribution_frame()      #           markov   shapley
+                                    # Direct  0.071429  0.142857
+                                    # Email   0.357143  0.309524
+                                    # Search  0.214286  0.166667
+                                    # Social  0.357143  0.380952
+comparison.unavailable_models()     # {} — every model produced a share vector
 comparison.difference_frame("markov")
 ```
+
+A model whose normalization is unavailable contributes an all-`NaN` column
+and is listed by `unavailable_models()` with its reason code.
+`shapley_characteristic_function=` selects the Shapley game.
 
 The two methods answer different statistical questions and can disagree
 materially without either being defective — `difference_frame` makes the

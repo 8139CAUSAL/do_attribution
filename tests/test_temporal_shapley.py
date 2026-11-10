@@ -100,9 +100,10 @@ def test_global_and_volume_weighted_diverge_when_channels_enter_exit(
 ):
     """The static global fit and the volume-weighted mean must not agree.
 
-    MODIFIED (get-well Unit 1): channels that enter and exit make the
-    divergence total rather than numerical.  Because v(S) counts paths whose
-    unique channel set is exactly S, a dataset where no single path touches
+    MODIFIED (get-well Unit 1): under the legacy ``"exact"`` game, channels
+    that enter and exit make the divergence total rather than numerical.
+    Because that game's v(S) counts paths whose unique channel set is
+    exactly S, a dataset where no single path touches
     every channel forces v(N) = 0, the global raw values cancel, and no
     global share vector exists at all.  Each two-channel epoch is still
     well-conditioned, so the volume-weighted view remains available.
@@ -112,7 +113,9 @@ def test_global_and_volume_weighted_diverge_when_channels_enter_exit(
     defined.
     """
     paths, dates, convs = small_temporal_data
-    model = TemporalShapleyAttribution(freq="Q", min_samples_per_epoch=5)
+    model = TemporalShapleyAttribution(
+        freq="Q", min_samples_per_epoch=5, characteristic_function="exact"
+    )
     model.fit(paths, dates, convs)
 
     g = model.global_attribution
@@ -131,6 +134,59 @@ def test_global_and_volume_weighted_diverge_when_channels_enter_exit(
     # The volume-weighted per-epoch view is available and includes A.
     assert "A" in vw
     assert sum(vw.values()) == pytest.approx(1.0, abs=1e-9)
+
+
+def test_default_game_global_equals_volume_weighted_view(small_temporal_data):
+    """Under the default cumulative game the two aggregate views coincide.
+
+    Cumulative Shapley values are additive over disjoint sets of paths: each
+    path splits its conversion among its own channels.  The static global
+    fit therefore equals the per-epoch values summed over epochs, and its
+    shares equal the conversion-weighted mean of the per-epoch shares — even
+    though A and C enter and exit between the two quarters.
+    """
+    paths, dates, convs = small_temporal_data
+    model = TemporalShapleyAttribution(freq="Q", min_samples_per_epoch=5)
+    model.fit(paths, dates, convs)
+
+    assert model.characteristic_function == "cumulative"
+    assert model.global_normalization_status == "available"
+    assert model.global_normalization_reason is None
+
+    global_shares = model.global_attribution
+    assert set(global_shares) == {"A", "B", "C"}
+    assert sum(global_shares.values()) == pytest.approx(1.0, abs=1e-12)
+    assert global_shares == pytest.approx(model.get_volume_weighted_attribution())
+
+    raw = model.global_shapley_values
+    assert all(value >= 0.0 for value in raw.values())
+    assert sum(raw.values()) == pytest.approx(sum(convs))
+    summed_over_epochs = model.get_shapley_values_matrix().fillna(0.0).sum()
+    assert raw == pytest.approx(summed_over_epochs.to_dict())
+
+
+def test_characteristic_function_is_applied_to_every_epoch(small_temporal_data):
+    paths, dates, convs = small_temporal_data
+    default = TemporalShapleyAttribution(freq="Q", min_samples_per_epoch=5)
+    default.fit(paths, dates, convs)
+    legacy = TemporalShapleyAttribution(
+        freq="Q", min_samples_per_epoch=5, characteristic_function="exact"
+    )
+    legacy.fit(paths, dates, convs)
+
+    assert legacy.characteristic_function == "exact"
+    for epoch in default.epochs:
+        assert default.epoch_results[epoch]["characteristic_function"] == "cumulative"
+        assert legacy.epoch_results[epoch]["characteristic_function"] == "exact"
+        # Per-epoch conversions are fully allocated by the default game.
+        assert sum(
+            default.epoch_results[epoch]["shapley_values"].values()
+        ) == pytest.approx(float(default._epoch_conversions[epoch].sum()))
+
+
+def test_invalid_characteristic_function_rejected_at_construction():
+    with pytest.raises(ValueError, match="characteristic_function must be one of"):
+        TemporalShapleyAttribution(characteristic_function="subset")
 
 
 def test_attribution_matrix_include_global_appends_two_rows(

@@ -48,7 +48,7 @@ def test_unavailable_model_column_is_nan_not_zero(
     example_paths, example_conversions
 ):
     """A refused normalization must not masquerade as all-zero shares."""
-    cmp_ = CompareAttribution()
+    cmp_ = CompareAttribution(shapley_characteristic_function="exact")
     cmp_.fit(example_paths, example_conversions)
     frame = cmp_.attribution_frame()
     unavailable = cmp_.unavailable_models()
@@ -107,6 +107,30 @@ def test_markov_detour_kwarg_passed_through():
     assert cmp_.markov.removal_strategy == "detour"
     assert isinstance(cmp_.shapley, ShapleyAttribution)
     assert isinstance(cmp_.markov, MarkovAttribution)
+
+
+def test_shapley_characteristic_function_kwarg_passed_through():
+    assert CompareAttribution().shapley.characteristic_function == "cumulative"
+    cmp_ = CompareAttribution(shapley_characteristic_function="exact")
+    assert cmp_.shapley.characteristic_function == "exact"
+
+
+def test_default_comparison_has_no_unavailable_models(
+    example_paths, example_conversions
+):
+    """Both default models produce share vectors on the shared fixture."""
+    cmp_ = CompareAttribution(
+        markov_removal_strategy="redirect_to_null",
+        conversion_labels=["Purchase"],
+    )
+    cmp_.fit(example_paths, example_conversions)
+
+    assert cmp_.unavailable_models() == {}
+    frame = cmp_.attribution_frame()
+    assert not frame.isna().any().any()
+    assert frame["markov"].sum() == pytest.approx(1.0)
+    assert frame["shapley"].sum() == pytest.approx(1.0)
+    assert not cmp_.difference_frame("markov").isna().any().any()
 
 
 # --------------------------------------------------------------------------- #

@@ -127,8 +127,9 @@ class TemporalShapleyAttribution(ShapleyAttribution):
 
     Inherits from :class:`ShapleyAttribution`. Each per-epoch compute step
     calls ``super().fit`` on the epoch's slice, so every correctness fix
-    made to the parent Shapley code (normalisation fallback, conversion-
-    label stripping, etc.) applies to the temporal variant automatically.
+    made to the parent Shapley code (characteristic function,
+    normalisation policy, conversion-label stripping, etc.) applies to the
+    temporal variant automatically.
 
     Parameters
     ----------
@@ -172,6 +173,9 @@ class TemporalShapleyAttribution(ShapleyAttribution):
         Tokens in path strings that represent the conversion endpoint
         (e.g. ``"Purchase"``). Forwarded to :class:`ShapleyAttribution`,
         which strips them per-call during the inherited ``fit``.
+    characteristic_function : {'cumulative', 'exact'}, default='cumulative'
+        Coalition game forwarded to :class:`ShapleyAttribution` and applied
+        identically to every epoch and to the lazy global fit.
 
     Attributes
     ----------
@@ -185,18 +189,20 @@ class TemporalShapleyAttribution(ShapleyAttribution):
     epoch_results : dict[Period, dict]
         Shapley results keyed by epoch period. Each value is the dict
         returned by the parent's ``fit``
-        (``attribution`` / ``shapley_values`` / ``value_function``).
+        (``attribution`` / ``shapley_values`` / ``value_function`` /
+        ``characteristic_function`` plus the normalization diagnostics).
     global_attribution : dict[str, float]
         Static Shapley attribution on the full path set. **Lazy** — the
         underlying ``super().fit`` call is deferred until first access,
         so per-epoch-only callers do not pay for the N+1th refit.
 
         .. warning::
-           This is the static Shapley fit on the full path set, NOT the
-           volume-weighted mean of per-epoch attributions. Channels that
-           enter or exit the data across epochs make the two diverge.
-           See :meth:`get_volume_weighted_attribution` for the
-           per-epoch-mean view.
+           This is the static Shapley fit on the full path set, not a
+           mean of per-epoch attributions. Under the legacy ``'exact'``
+           game, channels that enter or exit the data across epochs make
+           it diverge from :meth:`get_volume_weighted_attribution`. Under
+           the default ``'cumulative'`` game the Shapley values are
+           additive over disjoint sets of paths, so the two views agree.
 
     Examples
     --------
@@ -214,8 +220,13 @@ class TemporalShapleyAttribution(ShapleyAttribution):
         epoch_assignment: str = "conversion",
         separator: str = DEFAULT_SEPARATOR,
         conversion_labels: Optional[Iterable[str]] = None,
+        characteristic_function: str = "cumulative",
     ) -> None:
-        super().__init__(separator=separator, conversion_labels=conversion_labels)
+        super().__init__(
+            separator=separator,
+            conversion_labels=conversion_labels,
+            characteristic_function=characteristic_function,
+        )
 
         # MODIFIED (v2 PR 2): validate freq up-front. Accepts str or
         # Mapping[int, str]; mapping enables mixed-granularity per-year
@@ -626,11 +637,12 @@ class TemporalShapleyAttribution(ShapleyAttribution):
         """Static Shapley attribution on the full (across-epoch) path set.
 
         .. warning::
-           This is the static Shapley fit on the full path set, NOT the
-           volume-weighted mean of per-epoch attributions. Channels that
-           enter or exit the data across epochs make the two diverge.
-           See :meth:`get_volume_weighted_attribution` for the
-           per-epoch-mean view.
+           This is the static Shapley fit on the full path set, not a
+           mean of per-epoch attributions. Under the legacy ``'exact'``
+           game, channels that enter or exit the data across epochs make
+           it diverge from :meth:`get_volume_weighted_attribution`. Under
+           the default ``'cumulative'`` game the Shapley values are
+           additive over disjoint sets of paths, so the two views agree.
 
         Lazy — the inherited ``super().fit`` call only runs the first
         time this property (or anything that depends on it) is accessed,
@@ -946,10 +958,12 @@ class TemporalShapleyAttribution(ShapleyAttribution):
                 totals.
 
             .. warning::
-               These two rows are *different* in general. Channels that
-               enter or exit the data across epochs pull them apart, and
-               the gap is itself a useful diagnostic. Surfacing both
-               side-by-side is intentional (Risk 3 in the v1 punch list).
+               Under the legacy ``'exact'`` game these two rows are
+               *different* in general. Channels that enter or exit the
+               data across epochs pull them apart, and the gap is itself
+               a useful diagnostic. Surfacing both side-by-side is
+               intentional (Risk 3 in the v1 punch list). Under the
+               default ``'cumulative'`` game the two rows agree.
 
         Returns
         -------

@@ -23,7 +23,9 @@ def test_static_calibration_refuses_unavailable_normalized_attribution() -> None
     paths = ["A"] * 90 + ["B"] * 10 + ["A > B"]
     conversions = [1] * len(paths)
     with pytest.warns(UserWarning, match="normalization is unavailable"):
-        attribution_result = ShapleyAttribution().fit(paths, conversions)
+        attribution_result = ShapleyAttribution(
+            characteristic_function="exact"
+        ).fit(paths, conversions)
 
     raw_values = dict(attribution_result["shapley_values"])
     assert attribution_result["attribution"] is None

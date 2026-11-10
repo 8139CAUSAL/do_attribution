@@ -4,9 +4,10 @@ do_attribution.shapley
 
 Coalitional-game-theoretic Shapley-value multi-touch attribution.
 
-For a set of channels ``N``, define the value function ``v(S)`` as the
-total conversions on paths whose unique channel set equals exactly ``S``.
-Each channel's Shapley value is
+For a set of channels ``N``, let ``R(T)`` be the total conversions on paths
+whose unique channel set equals exactly ``T`` (the observed coalition
+conversion table, published as ``value_function``).  Each channel's Shapley
+value is
 
     phi_i = sum_{S subset of N\\{i}}  w(s, n) * (v(S u {i}) - v(S))
 
@@ -14,15 +15,33 @@ with the exact factorial weight
 
     w(s, n) = s! * (n - s - 1)! / n!
 
-The factorial weights ``w(s, n)`` are computed once per coalition size
-and cached; coalition-value lookups use :pyclass:`collections.defaultdict`
-so unseen coalitions resolve to 0 without explicit ``.get`` calls.
+The characteristic function ``v`` is selected by ``characteristic_function``:
+
+``"cumulative"`` (default)
+    ``v(S) = sum_{T subset of S} R(T)`` — the conversions a coalition can
+    account for using only its own channels.  ``v`` is monotone and
+    ``v(N)`` is the total number of observed conversions, so the efficiency
+    axiom makes the Shapley values a non-negative allocation of *every*
+    conversion.  Because ``v`` is a sum of unanimity games weighted by
+    ``R(T)``, the factorial-weight definition above reduces exactly to
+
+        phi_i = sum_{T containing i} R(T) / |T|
+
+    which is what is evaluated: it costs one pass over the observed
+    coalitions instead of the ``2^n`` coalition lattice.
+
+``"exact"`` (legacy)
+    ``v(S) = R(S)``.  This game is not monotone and efficiency forces
+    ``sum(phi_i) = v(N)``, the conversions on paths that touch *every*
+    channel.  ``v(N)`` is zero on most real data, so the raw values cancel
+    and no share vector exists.  Retained for backward compatibility and
+    evaluated by direct enumeration with cached factorial weights.
 """
 
 from __future__ import annotations
 
 from collections import defaultdict
-from math import factorial
+from math import factorial, fsum
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 import warnings
 
@@ -48,6 +67,25 @@ from .utils import (
     to_string_array,
     validate_data,
 )
+
+
+#: Supported characteristic functions, default first.
+SHAPLEY_CHARACTERISTIC_FUNCTIONS: Tuple[str, ...] = ("cumulative", "exact")
+
+
+def _validate_characteristic_function(value: Any) -> str:
+    """Validate the ``characteristic_function`` constructor argument."""
+    if not isinstance(value, str):
+        raise TypeError(
+            "characteristic_function must be a string, got "
+            f"{type(value).__name__}"
+        )
+    if value not in SHAPLEY_CHARACTERISTIC_FUNCTIONS:
+        raise ValueError(
+            "characteristic_function must be one of "
+            f"{list(SHAPLEY_CHARACTERISTIC_FUNCTIONS)}, got {value!r}"
+        )
+    return value
 
 
 # MODIFIED (get-well Unit 1): rendering helpers for the normalization state.
@@ -99,24 +137,44 @@ class ShapleyAttribution(BaseAttribution):
         any Shapley math, so endpoint tokens never appear as coalition
         members, channels, or attribution keys.  See
         :class:`do_attribution.base.BaseAttribution` for full semantics.
+    characteristic_function : {'cumulative', 'exact'}, default='cumulative'
+        The coalition game the Shapley values are computed on, defined from
+        the observed coalition conversion table ``R(T)`` (``value_function``).
+
+        * ``'cumulative'`` — ``v(S)`` is the conversions on paths whose
+          channel set is contained in ``S``.  The Shapley values are
+          non-negative and sum to the total observed conversions, so
+          normalized attribution exists whenever a path with at least one
+          channel converted.
+        * ``'exact'`` — ``v(S)`` is the conversions on paths whose channel
+          set is exactly ``S`` (the behaviour of releases up to 0.0.2).
+          The values are signed and sum to the conversions on paths that
+          touch every channel, so normalized attribution is unavailable
+          unless such paths exist and no candidate share is negative.
 
     Attributes
     ----------
     channels : list[str]
         All user-visible channels observed across the paths (sorted).
     value_function : dict[tuple[str, ...], int]
-        ``v(S)`` = total conversions for the subset of paths whose unique
-        set of channels is exactly ``S``.  Coalition keys are sorted
-        tuples.
+        ``R(T)`` = total conversions for the subset of paths whose unique
+        set of channels is exactly ``T``.  Coalition keys are sorted
+        tuples.  Under ``'exact'`` this is ``v`` itself; under
+        ``'cumulative'``, ``v(S)`` is the sum of these entries over every
+        observed coalition contained in ``S``.
     """
 
     def __init__(
         self,
         separator: str = DEFAULT_SEPARATOR,
         conversion_labels: Optional[Iterable[str]] = None,  # MODIFIED: P0.
+        characteristic_function: str = "cumulative",
     ) -> None:
         # MODIFIED: forward conversion_labels to BaseAttribution.
         super().__init__(separator=separator, conversion_labels=conversion_labels)
+        self.characteristic_function: str = _validate_characteristic_function(
+            characteristic_function
+        )
         self.value_function: Dict[Tuple[str, ...], int] = {}
 
     # ------------------------------------------------------------------ #
@@ -136,11 +194,15 @@ class ShapleyAttribution(BaseAttribution):
               - ``'attribution'``    : dict[str, float] of normalized shares
                 summing to 1, **or** ``None`` when normalization is
                 unavailable.  Always check before indexing.
-              - ``'shapley_values'`` : dict[str, float] raw signed Shapley
-                values.  Always present.  These are diagnostics on the
-                game's own scale — not shares, percentages, or
-                probabilities — and are never rescaled by normalization.
-              - ``'value_function'`` : dict[tuple, int] coalition -> convs
+              - ``'shapley_values'`` : dict[str, float] raw Shapley values
+                on the game's own scale (conversions).  Always present and
+                never rescaled by normalization.  Under ``'cumulative'``
+                they are non-negative and sum to the total observed
+                conversions; under ``'exact'`` they are signed diagnostics
+                — not shares, percentages, or probabilities.
+              - ``'value_function'`` : dict[tuple, int] exact channel set
+                -> conversions (``R(T)``)
+              - ``'characteristic_function'`` : the game that was fitted
               - ``'normalization_status'``     : ``'available'`` or
                 ``'unavailable'``
               - ``'normalization_reason'``     : ``None`` when available,
@@ -151,12 +213,17 @@ class ShapleyAttribution(BaseAttribution):
 
         Notes
         -----
-        Under this library's value function — ``v(S)`` = conversions on
-        paths whose unique channel set is exactly ``S`` — the Shapley
-        efficiency axiom forces ``sum(phi_i) = v(N)``, and ``v(N) = 0``
-        whenever no single path touches every channel.  The raw values then
-        cancel, and no valid share vector exists.  ``attribution`` is
-        ``None`` in that case; the raw values are still returned.
+        The Shapley efficiency axiom forces ``sum(phi_i) = v(N)``.
+
+        Under ``'cumulative'``, ``v(N)`` is every observed conversion, so
+        normalization is unavailable only when no conversion can be
+        credited to a channel (``zero_raw_magnitude``).
+
+        Under ``'exact'``, ``v(N)`` is the conversions on paths whose
+        channel set is the full channel set, and ``v(N) = 0`` whenever no
+        single path touches every channel.  The raw values then cancel, and
+        no valid share vector exists.  ``attribution`` is ``None`` in that
+        case; the raw values are still returned.
 
         Attributed conversions must not be computed from ``attribution``
         unless ``normalization_status == 'available'``.
@@ -187,6 +254,7 @@ class ShapleyAttribution(BaseAttribution):
                 "attribution": normalization.attribution,
                 "shapley_values": {},
                 "value_function": {},
+                "characteristic_function": self.characteristic_function,
             }
             result.update(normalization.diagnostics())
             self._store_static_reporting(
@@ -196,33 +264,15 @@ class ShapleyAttribution(BaseAttribution):
             )
             return result
 
-        # 1. Value function  v(S) = sum of conversions for paths whose
-        #    unique channel-set is exactly S.
+        # 1. Observed coalition conversion table  R(T) = sum of conversions
+        #    for paths whose unique channel-set is exactly T.
         self.value_function = self._calculate_value_function(paths_arr, conv_arr)
 
-        # 2. Pre-compute w(s, n) for every coalition size s = 0 .. n-1.
-        #    This is the factorial optimisation mentioned in the spec:
-        #    we hit this weight 2^(n-1) * n times otherwise.
-        n_fact = factorial(n)
-        weights: List[float] = [
-            (factorial(s) * factorial(n - s - 1)) / n_fact for s in range(n)
-        ]
-
-        # 3. Raw Shapley values.  Use a defaultdict so unseen coalitions
-        #    contribute 0 without an explicit `.get`.
-        vf = defaultdict(int, self.value_function)
-        shapley_values: Dict[str, float] = {ch: 0.0 for ch in self.channels}
-        channel_set = set(self.channels)
-
-        for ch in self.channels:
-            others = list(channel_set - {ch})
-            for coalition in get_powerset(others):
-                s = len(coalition)
-                with_ch = tuple(sorted(coalition + (ch,)))
-                without_ch = tuple(sorted(coalition))
-                marginal = vf[with_ch] - vf[without_ch]
-                if marginal:
-                    shapley_values[ch] += weights[s] * marginal
+        # 2-3. Raw Shapley values on the configured coalition game.
+        if self.characteristic_function == "cumulative":
+            shapley_values = self._cumulative_shapley_values()
+        else:
+            shapley_values = self._exact_set_shapley_values()
 
         # 4. Normalise the raw signed game values into attribution shares.
         #
@@ -258,6 +308,7 @@ class ShapleyAttribution(BaseAttribution):
             "attribution": attribution,
             "shapley_values": shapley_values,
             "value_function": self.value_function,
+            "characteristic_function": self.characteristic_function,
         }
         # MODIFIED (get-well Unit 1): machine-readable normalization state
         # travels with the result so downstream consumers and serialization
@@ -284,12 +335,70 @@ class ShapleyAttribution(BaseAttribution):
     # ------------------------------------------------------------------ #
     # Internals                                                           #
     # ------------------------------------------------------------------ #
+    def _cumulative_shapley_values(self) -> Dict[str, float]:
+        """Shapley values of ``v(S) = sum_{T subset of S} R(T)``.
+
+        ``v`` is the sum of the unanimity games ``u_T`` weighted by
+        ``R(T)``, and the Shapley value of ``u_T`` gives ``1/|T|`` to each
+        member of ``T``.  By linearity the factorial-weight definition
+        therefore equals ``phi_i = sum_{T containing i} R(T) / |T|``: each
+        observed coalition splits its conversions equally among its
+        channels.
+
+        A coalition's players are its channels in ``self.channels``, so a
+        reserved token that survived in a path is not a player, matching
+        :func:`do_attribution.utils.extract_channels`.  Each channel's
+        terms are combined with :func:`math.fsum`, which makes the result
+        independent of coalition iteration order.
+        """
+        players = set(self.channels)
+        terms: Dict[str, List[float]] = {ch: [] for ch in self.channels}
+        for coalition, conversions in self.value_function.items():
+            if not conversions:
+                continue
+            members = [ch for ch in coalition if ch in players]
+            if not members:
+                continue
+            credit = conversions / len(members)
+            for ch in members:
+                terms[ch].append(credit)
+        return {ch: fsum(parts) for ch, parts in terms.items()}
+
+    def _exact_set_shapley_values(self) -> Dict[str, float]:
+        """Shapley values of the legacy game ``v(S) = R(S)``."""
+        n = len(self.channels)
+
+        # Pre-compute w(s, n) for every coalition size s = 0 .. n-1.
+        # This is the factorial optimisation mentioned in the spec:
+        # we hit this weight 2^(n-1) * n times otherwise.
+        n_fact = factorial(n)
+        weights: List[float] = [
+            (factorial(s) * factorial(n - s - 1)) / n_fact for s in range(n)
+        ]
+
+        # Raw Shapley values.  Use a defaultdict so unseen coalitions
+        # contribute 0 without an explicit `.get`.
+        vf = defaultdict(int, self.value_function)
+        shapley_values: Dict[str, float] = {ch: 0.0 for ch in self.channels}
+        channel_set = set(self.channels)
+
+        for ch in self.channels:
+            others = list(channel_set - {ch})
+            for coalition in get_powerset(others):
+                s = len(coalition)
+                with_ch = tuple(sorted(coalition + (ch,)))
+                without_ch = tuple(sorted(coalition))
+                marginal = vf[with_ch] - vf[without_ch]
+                if marginal:
+                    shapley_values[ch] += weights[s] * marginal
+        return shapley_values
+
     def _calculate_value_function(
         self,
         paths: np.ndarray,
         conversions: np.ndarray,
     ) -> Dict[Tuple[str, ...], int]:
-        """v(S) = total conversions whose *unique* channel set equals S."""
+        """R(T) = total conversions whose *unique* channel set equals T."""
         coalition_map: Dict[Tuple[str, ...], int] = {}
         for path, conv in zip(paths, conversions):
             channels = tuple(
@@ -301,4 +410,4 @@ class ShapleyAttribution(BaseAttribution):
         return coalition_map
 
 
-__all__ = ["ShapleyAttribution"]
+__all__ = ["ShapleyAttribution", "SHAPLEY_CHARACTERISTIC_FUNCTIONS"]

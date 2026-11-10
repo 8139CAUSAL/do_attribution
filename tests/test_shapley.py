@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from itertools import combinations
 from math import comb, factorial
 
 import numpy as np
@@ -25,14 +26,13 @@ def test_attribution_sums_to_one():
 def test_efficiency_sum_equals_grand_coalition_value():
     """Shapley values should satisfy phi_1 + ... + phi_n == v(N) - v(emptyset).
 
-    Under this library's value-function convention (v(S) = conversions from
-    paths whose unique-channel-set is *exactly* S), v(emptyset) = 0 and
-    v(N) equals the number of conversions on paths that touched every
-    channel.
+    Under the legacy ``"exact"`` game (v(S) = conversions from paths whose
+    unique-channel-set is *exactly* S), v(emptyset) = 0 and v(N) equals the
+    number of conversions on paths that touched every channel.
     """
     paths = ["A > B > C", "A > C", "B > C", "A > B"]
     conversions = [1, 0, 1, 1]
-    res = ShapleyAttribution().fit(paths, conversions)
+    res = ShapleyAttribution(characteristic_function="exact").fit(paths, conversions)
 
     grand_coalition = tuple(sorted({"A", "B", "C"}))
     v_N = res["value_function"].get(grand_coalition, 0)
@@ -53,6 +53,7 @@ def test_symmetry_two_identical_channels():
 # Hand-computed example                                                        #
 # --------------------------------------------------------------------------- #
 def test_hand_computed_two_channel_example():
+    # Legacy "exact" game.
     # Two channels A, B, two paths: {A} converts once, {A, B} converts twice.
     # v({}) = 0, v({A}) = 1, v({B}) = 0, v({A, B}) = 2.
     # phi_A = 0.5 * (v({A}) - v({})) + 0.5 * (v({A,B}) - v({B}))
@@ -61,7 +62,7 @@ def test_hand_computed_two_channel_example():
     #       = 0.5 * 0 + 0.5 * 1 = 0.5
     paths = ["A", "A > B", "A > B"]
     convs = [1, 1, 1]
-    res = ShapleyAttribution().fit(paths, convs)
+    res = ShapleyAttribution(characteristic_function="exact").fit(paths, convs)
     assert res["shapley_values"]["A"] == pytest.approx(1.5)
     assert res["shapley_values"]["B"] == pytest.approx(0.5)
     assert res["attribution"]["A"] == pytest.approx(0.75)
@@ -107,11 +108,10 @@ def test_accepts_series_inputs():
     paths = pd.Series(["A > B", "B > C"])
     convs = pd.Series([1, 1])
     res = ShapleyAttribution().fit(paths, convs)
-    # MODIFIED (get-well Unit 1): no path touches every channel here, so
-    # v(N) = 0 and the raw values cancel; normalized attribution is
-    # therefore unavailable.  The input-handling contract under test is the
-    # channel set, which is asserted on the always-present raw values.
+    # The input-handling contract under test is the channel set, which is
+    # asserted on the always-present raw values and on the shares.
     assert set(res["shapley_values"].keys()) == {"A", "B", "C"}
+    assert set(res["attribution"].keys()) == {"A", "B", "C"}
 
 
 def test_accepts_numpy_array_inputs():
@@ -152,7 +152,7 @@ def test_factorial_weights_match_spec():
     """
     paths = ["A", "A > B", "A > B > C"]
     convs = [1, 1, 1]
-    res = ShapleyAttribution().fit(paths, convs)
+    res = ShapleyAttribution(characteristic_function="exact").fit(paths, convs)
     n = 3
     w = [(factorial(s) * factorial(n - s - 1)) / factorial(n) for s in range(n)]
     # All weights positive.
@@ -182,11 +182,9 @@ def test_conversion_label_absent_from_shapley_outputs(
     model = ShapleyAttribution(conversion_labels=["Purchase"])
     res = model.fit(example_paths, example_conversions)
 
-    # MODIFIED (get-well Unit 1): this fixture cancels, so 'attribution' is
-    # None; the endpoint-stripping contract is asserted on every output that
-    # is populated regardless of normalization availability.
-    if res["attribution"] is not None:
-        assert "Purchase" not in res["attribution"]
+    # The endpoint-stripping contract is asserted on every output.
+    assert res["attribution"] is not None
+    assert "Purchase" not in res["attribution"]
     assert "Purchase" not in res["shapley_values"]
     assert "Purchase" not in model.get_channels()
     for coalition in res["value_function"]:
@@ -204,8 +202,8 @@ def test_conversion_label_matches_prestripping_shapley(
     )
     # MODIFIED (get-well Unit 1): the equivalence claim is about the model
     # arithmetic, which lives in the raw values.  Those are populated in
-    # every state, so the comparison no longer depends on normalization
-    # being available (it is not, for this fixture).
+    # every state, so the comparison does not depend on normalization
+    # being available.
     assert set(labeled["shapley_values"]) == set(prestripped["shapley_values"])
     for ch in labeled["shapley_values"]:
         assert labeled["shapley_values"][ch] == pytest.approx(
@@ -232,7 +230,7 @@ def test_conversion_label_bare_string_rejected_shapley():
 # --------------------------------------------------------------------------- #
 # Normalisation safeguards against near-zero Shapley totals                    #
 # --------------------------------------------------------------------------- #
-# MODIFIED (get-well Unit 1): The library's value function is
+# MODIFIED (get-well Unit 1): The legacy ``"exact"`` game is
 # v(S) = conversions whose unique channel set equals *exactly* S.  Under this
 # convention, the Shapley efficiency axiom forces sum(phi_i) = v(N), and
 # v(N) = 0 whenever no single path touches every channel.  Dividing by that
@@ -249,7 +247,9 @@ def test_near_zero_total_refuses_normalization(
     example_paths, example_conversions
 ):
     with pytest.warns(UserWarning, match="normalization is unavailable"):
-        res = ShapleyAttribution(conversion_labels=["Purchase"]).fit(
+        res = ShapleyAttribution(
+            conversion_labels=["Purchase"], characteristic_function="exact"
+        ).fit(
             example_paths, example_conversions
         )
 
@@ -263,7 +263,9 @@ def test_near_zero_total_preserves_raw_signed_values(
 ):
     """Raw diagnostics survive intact when normalization is refused."""
     with pytest.warns(UserWarning):
-        res = ShapleyAttribution(conversion_labels=["Purchase"]).fit(
+        res = ShapleyAttribution(
+            conversion_labels=["Purchase"], characteristic_function="exact"
+        ).fit(
             example_paths, example_conversions
         )
 
@@ -284,7 +286,9 @@ def test_near_zero_total_reports_scale_aware_cancellation(
 ):
     """The refusal is driven by the scale-aware ratio, not the bare sum."""
     with pytest.warns(UserWarning):
-        res = ShapleyAttribution(conversion_labels=["Purchase"]).fit(
+        res = ShapleyAttribution(
+            conversion_labels=["Purchase"], characteristic_function="exact"
+        ).fit(
             example_paths, example_conversions
         )
 
@@ -298,7 +302,9 @@ def test_near_zero_total_blocks_attributed_conversions(
     example_paths, example_conversions
 ):
     """Attributed conversions cannot be derived from unavailable attribution."""
-    model = ShapleyAttribution(conversion_labels=["Purchase"])
+    model = ShapleyAttribution(
+        conversion_labels=["Purchase"], characteristic_function="exact"
+    )
     with pytest.warns(UserWarning):
         res = model.fit(example_paths, example_conversions)
 
@@ -332,7 +338,9 @@ def test_near_zero_total_attribution_shares_not_exploding(
     the guarantee is stronger than a magnitude bound — the rendered summary
     contains no percentage-formatted attribution at all.
     """
-    model = ShapleyAttribution(conversion_labels=["Purchase"])
+    model = ShapleyAttribution(
+        conversion_labels=["Purchase"], characteristic_function="exact"
+    )
     with pytest.warns(UserWarning):
         res = model.fit(example_paths, example_conversions)
 
@@ -361,7 +369,7 @@ def test_characterization_reported_signed_normalization_case():
     """
     paths = ["A"] * 90 + ["B"] * 10 + ["A > B"]
     conversions = [1] * len(paths)
-    model = ShapleyAttribution()
+    model = ShapleyAttribution(characteristic_function="exact")
 
     with pytest.warns(UserWarning, match="normalization is unavailable"):
         result = model.fit(paths, conversions)
@@ -401,3 +409,180 @@ def test_characterization_reported_signed_normalization_case():
     assert "-39.5000" in summary
     assert "Normalized attribution unavailable (negative_share)" in summary
     assert "Not calculated - requires normalized attribution" in summary
+
+
+# --------------------------------------------------------------------------- #
+# Default "cumulative" characteristic function                                 #
+# --------------------------------------------------------------------------- #
+# v(S) = conversions on paths whose channel set is contained in S.  v(N) is
+# every observed conversion, so the Shapley values are a non-negative
+# allocation of all conversions and normalized attribution exists whenever
+# any path converted — including when no path touches every channel, which
+# is the case the legacy "exact" game cannot normalise.
+def _brute_force_cumulative_shapley(channels, coalition_conversions):
+    """Factorial-weight Shapley values of v(S) = sum of R(T) for T within S."""
+    n = len(channels)
+
+    def v(coalition):
+        members = set(coalition)
+        return sum(
+            conversions
+            for key, conversions in coalition_conversions.items()
+            if set(key) <= members
+        )
+
+    values = {}
+    for channel in channels:
+        others = [other for other in channels if other != channel]
+        total = 0.0
+        for size in range(n):
+            weight = factorial(size) * factorial(n - size - 1) / factorial(n)
+            for subset in combinations(others, size):
+                total += weight * (v(subset + (channel,)) - v(subset))
+        values[channel] = total
+    return values
+
+
+def test_default_characteristic_function_is_cumulative():
+    model = ShapleyAttribution()
+    assert model.characteristic_function == "cumulative"
+    res = model.fit(["A > B"], [1])
+    assert res["characteristic_function"] == "cumulative"
+    legacy = ShapleyAttribution(characteristic_function="exact").fit(["A > B"], [1])
+    assert legacy["characteristic_function"] == "exact"
+
+
+def test_cumulative_hand_computed_two_channel_example():
+    # R({A}) = 1, R({A, B}) = 2, so v({A}) = 1, v({B}) = 0, v({A, B}) = 3.
+    # phi_A = 0.5 * (v({A}) - v({})) + 0.5 * (v({A,B}) - v({B}))
+    #       = 0.5 * 1 + 0.5 * 3 = 2
+    # phi_B = 0.5 * (v({B}) - v({})) + 0.5 * (v({A,B}) - v({A}))
+    #       = 0.5 * 0 + 0.5 * 2 = 1
+    res = ShapleyAttribution().fit(["A", "A > B", "A > B"], [1, 1, 1])
+    assert res["shapley_values"] == {"A": 2.0, "B": 1.0}
+    assert res["attribution"]["A"] == pytest.approx(2 / 3)
+    assert res["attribution"]["B"] == pytest.approx(1 / 3)
+    assert res["normalization_status"] == "available"
+    assert res["normalization_reason"] is None
+
+
+def test_cumulative_efficiency_allocates_every_conversion():
+    paths = ["A > B > C", "A > C", "B > C", "A > B", "C", "A"]
+    conversions = [1, 0, 1, 1, 1, 1]
+    res = ShapleyAttribution().fit(paths, conversions)
+    assert sum(res["shapley_values"].values()) == pytest.approx(sum(conversions))
+    assert res["raw_sum"] == pytest.approx(sum(conversions))
+    assert res["normalization_denominator"] == pytest.approx(sum(conversions))
+    assert res["cancellation_ratio"] == pytest.approx(1.0)
+    assert all(value >= 0.0 for value in res["shapley_values"].values())
+    assert sum(res["attribution"].values()) == pytest.approx(1.0, abs=1e-12)
+
+
+def test_cumulative_available_when_no_path_touches_every_channel():
+    """The regime that defeats the legacy game is well-defined by default."""
+    paths = ["A"] * 90 + ["B"] * 10
+    conversions = [1] * 100
+    res = ShapleyAttribution().fit(paths, conversions)
+    assert ("A", "B") not in res["value_function"]  # v_exact(N) = 0
+    assert res["shapley_values"] == {"A": 90.0, "B": 10.0}
+    assert res["attribution"] == {"A": 0.9, "B": 0.1}
+
+    with pytest.warns(UserWarning, match="normalization is unavailable"):
+        legacy = ShapleyAttribution(characteristic_function="exact").fit(
+            paths, conversions
+        )
+    assert legacy["attribution"] is None
+    assert legacy["normalization_reason"] == "near_cancellation"
+    # Both games are fitted from the same observed coalition table.
+    assert legacy["value_function"] == res["value_function"]
+
+
+def test_cumulative_allocation_is_stable_under_one_added_path():
+    """One extra A > B conversion moves each channel by exactly half of it."""
+    base_paths = ["A"] * 90 + ["B"] * 10
+    before = ShapleyAttribution().fit(base_paths, [1] * 100)
+    after = ShapleyAttribution().fit(base_paths + ["A > B"], [1] * 101)
+    assert before["shapley_values"] == {"A": 90.0, "B": 10.0}
+    assert after["shapley_values"] == {"A": 90.5, "B": 10.5}
+    assert after["attribution"]["A"] == pytest.approx(90.5 / 101)
+    assert after["attribution"]["B"] == pytest.approx(10.5 / 101)
+
+
+def test_cumulative_matches_factorial_weight_definition(
+    example_paths_no_endpoint, example_conversions
+):
+    """The dividend identity equals direct enumeration with w(s, n)."""
+    res = ShapleyAttribution().fit(example_paths_no_endpoint, example_conversions)
+    expected = _brute_force_cumulative_shapley(
+        sorted(res["shapley_values"]), res["value_function"]
+    )
+    assert set(res["shapley_values"]) == set(expected)
+    for channel, value in res["shapley_values"].items():
+        assert value == pytest.approx(expected[channel], abs=1e-12)
+
+
+def test_cumulative_symmetry_and_null_player():
+    # A and B are interchangeable; D never appears on a converting path.
+    paths = ["A > C", "B > C", "D", "A > D"]
+    conversions = [1, 1, 0, 0]
+    res = ShapleyAttribution().fit(paths, conversions)
+    assert res["shapley_values"]["A"] == pytest.approx(res["shapley_values"]["B"])
+    assert res["shapley_values"]["D"] == 0.0
+    assert res["attribution"]["D"] == 0.0
+
+
+def test_cumulative_repeated_touches_count_once_per_channel():
+    # "A > B > A" has the channel set {A, B}: each channel gets half.
+    res = ShapleyAttribution().fit(["A > B > A"], [1])
+    assert res["value_function"] == {("A", "B"): 1}
+    assert res["shapley_values"] == {"A": 0.5, "B": 0.5}
+
+
+def test_cumulative_reserved_tokens_are_not_players():
+    # Reserved tokens are excluded from the channel list, so they receive no
+    # credit and do not dilute the channels that share a path with them.
+    res = ShapleyAttribution().fit(["A > NULL", "B"], [1, 1])
+    assert set(res["shapley_values"]) == {"A", "B"}
+    assert res["shapley_values"] == {"A": 1.0, "B": 1.0}
+    assert res["attribution"] == {"A": 0.5, "B": 0.5}
+
+
+def test_cumulative_is_invariant_to_path_order():
+    paths = ["A > B", "B > C", "A", "C > A > B", "B", "A > C"] * 7
+    conversions = [1, 1, 0, 1, 1, 0] * 7
+    forward = ShapleyAttribution().fit(paths, conversions)
+    backward = ShapleyAttribution().fit(paths[::-1], conversions[::-1])
+    assert forward["shapley_values"] == backward["shapley_values"]
+    assert forward["attribution"] == backward["attribution"]
+
+
+def test_cumulative_zero_conversions_refuses_normalization():
+    with pytest.warns(UserWarning, match="normalization is unavailable"):
+        res = ShapleyAttribution().fit(["A > B", "B > C"], [0, 0])
+    assert res["attribution"] is None
+    assert res["normalization_reason"] == "zero_raw_magnitude"
+    assert res["shapley_values"] == {"A": 0.0, "B": 0.0, "C": 0.0}
+
+
+def test_cumulative_summary_reports_available_shares(
+    example_paths, example_conversions
+):
+    model = ShapleyAttribution(conversion_labels=["Purchase"])
+    res = model.fit(example_paths, example_conversions)
+    assert res["normalization_status"] == "available"
+    assert model.get_attribution() == res["attribution"]
+    summary = model.summary()
+    assert "Normalized attribution unavailable" not in summary
+    assert "Not calculated - requires normalized attribution" not in summary
+
+
+@pytest.mark.parametrize("value", ["subset", "", "Cumulative", "EXACT"])
+def test_unknown_characteristic_function_rejected(value):
+    with pytest.raises(ValueError, match="characteristic_function must be one of"):
+        ShapleyAttribution(characteristic_function=value)
+
+
+@pytest.mark.parametrize("value", [None, 1, ["cumulative"]])
+def test_non_string_characteristic_function_rejected(value):
+    with pytest.raises(TypeError, match="characteristic_function must be a string"):
+        ShapleyAttribution(characteristic_function=value)
