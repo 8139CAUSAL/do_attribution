@@ -111,6 +111,7 @@ from .temporal import assign_paths_to_epochs, recommend_epochs
 from ._temporal_helpers import (
     VALID_EPOCH_ASSIGNMENTS as _VALID_EPOCH_ASSIGNMENTS,
     align_index_to_epochs as _align_index_to_epochs,
+    bin_timestamps_to_epochs as _bin_timestamps_to_epochs,
     epoch_attribution as _epoch_attribution,
     get_period_key as _get_period_key,
     matrix_to_long_frame as _matrix_to_long_frame,
@@ -405,52 +406,43 @@ class TemporalMarkovAttribution(MarkovAttribution):
     ) -> Dict[str, Any]:
         """Per-year binning + per-epoch dispatch (exception-safe body)."""
 
-        # MODIFIED (v2 PR 2): per-year bucketed binning. Under str-freq
-        # this collapses to a single bucket containing every timestamp,
-        # so behaviour matches v1. Under Mapping-freq each year is binned
-        # with its own freq; epochs of different freqs land in
-        # ``self.epochs`` and are sorted by ``start_time``.
-        years = dt_index.year
-        sorted_years = sorted(set(int(y) for y in years))
-        all_epochs: List[pd.Period] = []
+        # MODIFIED (v2 PR 2): per-year binning. Each timestamp is binned
+        # with its own calendar year's freq, so a Mapping-freq yields
+        # epochs of different freqs, sorted by ``start_time``. Epochs are
+        # keyed by period, not by year bucket: a period that straddles a
+        # year boundary (the weekly period 2020-12-28/2021-01-03) collects
+        # its rows from both years and is fitted once on all of them.
+        epochs, epoch_codes = _bin_timestamps_to_epochs(
+            dt_index, self._resolve_freq
+        )
 
-        for year in sorted_years:
-            freq_for_year = self._resolve_freq(year)
-            year_mask = (years == year)
-            year_dt = dt_index[year_mask]
-            year_paths = paths_arr[year_mask]
-            year_convs = conv_arr[year_mask]
+        for position, epoch in enumerate(epochs):
+            emask = (epoch_codes == position)
+            epoch_paths = paths_arr[emask]
+            epoch_convs = conv_arr[emask]
 
-            year_periods = year_dt.to_period(freq_for_year)
+            self._epoch_paths[epoch] = epoch_paths
+            self._epoch_conversions[epoch] = epoch_convs
 
-            for epoch in sorted(year_periods.unique(), key=_get_period_key):
-                emask = (year_periods == epoch)
-                epoch_paths = year_paths[emask]
-                epoch_convs = year_convs[emask]
-
-                self._epoch_paths[epoch] = epoch_paths
-                self._epoch_conversions[epoch] = epoch_convs
-                all_epochs.append(epoch)
-
-                n_samples = len(epoch_paths)
-                # MODIFIED (Risk 2): warn against the strategy/order-aware
-                # adaptive floor, not the flat self.min_samples.
-                effective_floor = self._effective_min_samples(epoch_paths)
-                if n_samples < effective_floor:
-                    warnings.warn(
-                        f"Epoch {epoch} has only {n_samples} samples "
-                        f"(effective min: {effective_floor}, "
-                        f"base min: {self.min_samples}, "
-                        f"order={self.order}, "
-                        f"removal_strategy={self.removal_strategy!r}). "
-                        f"Results may be unreliable."
-                    )
-
-                self.epoch_results[epoch] = self._fit_epoch_safe(
-                    epoch, epoch_paths, epoch_convs
+            n_samples = len(epoch_paths)
+            # MODIFIED (Risk 2): warn against the strategy/order-aware
+            # adaptive floor, not the flat self.min_samples.
+            effective_floor = self._effective_min_samples(epoch_paths)
+            if n_samples < effective_floor:
+                warnings.warn(
+                    f"Epoch {epoch} has only {n_samples} samples "
+                    f"(effective min: {effective_floor}, "
+                    f"base min: {self.min_samples}, "
+                    f"order={self.order}, "
+                    f"removal_strategy={self.removal_strategy!r}). "
+                    f"Results may be unreliable."
                 )
 
-        self.epochs = sorted(all_epochs, key=_get_period_key)
+            self.epoch_results[epoch] = self._fit_epoch_safe(
+                epoch, epoch_paths, epoch_convs
+            )
+
+        self.epochs = epochs
 
         # MODIFIED (Risk 5): set self.channels eagerly from the union of
         # per-epoch attribution dicts.

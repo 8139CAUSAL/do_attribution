@@ -105,6 +105,7 @@ from .temporal import assign_paths_to_epochs, recommend_epochs
 from ._temporal_helpers import (
     VALID_EPOCH_ASSIGNMENTS as _VALID_EPOCH_ASSIGNMENTS,
     align_index_to_epochs as _align_index_to_epochs,
+    bin_timestamps_to_epochs as _bin_timestamps_to_epochs,
     epoch_attribution as _epoch_attribution,
     get_period_key as _get_period_key,
     matrix_to_long_frame as _matrix_to_long_frame,
@@ -372,57 +373,43 @@ class TemporalShapleyAttribution(ShapleyAttribution):
     ) -> Dict[str, Any]:
         """Per-year binning + per-epoch dispatch (exception-safe body)."""
 
-        # MODIFIED (v2 PR 2): per-year bucketed binning. Under str-freq
-        # this collapses to a single bucket containing every timestamp,
-        # so behaviour matches v1. Under Mapping-freq each year is binned
-        # with its own freq; epochs of different freqs land in
-        # ``self.epochs`` and are sorted by ``start_time`` (see
-        # ``_get_period_key``).
-        years = dt_index.year
-        sorted_years = sorted(set(int(y) for y in years))
-        all_epochs: List[pd.Period] = []
+        # MODIFIED (v2 PR 2): per-year binning. Each timestamp is binned
+        # with its own calendar year's freq, so a Mapping-freq yields
+        # epochs of different freqs, sorted by ``start_time`` (see
+        # ``_get_period_key``). Epochs are keyed by period, not by year
+        # bucket: a period that straddles a year boundary (the weekly
+        # period 2020-12-28/2021-01-03) collects its rows from both years
+        # and is fitted once on all of them.
+        epochs, epoch_codes = _bin_timestamps_to_epochs(
+            dt_index, self._resolve_freq
+        )
 
-        for year in sorted_years:
-            freq_for_year = self._resolve_freq(year)
-            year_mask = (years == year)
-            year_dt = dt_index[year_mask]
-            year_paths = paths_arr[year_mask]
-            year_convs = conv_arr[year_mask]
+        # Iterate epochs in chronological order so warnings come out in
+        # time order, matching v1 behaviour.
+        for position, epoch in enumerate(epochs):
+            emask = (epoch_codes == position)
+            epoch_paths = paths_arr[emask]
+            epoch_convs = conv_arr[emask]
 
-            # Period aliases deliberately remain the legacy aliases: pandas
-            # 3 retired them for offsets but still requires them for Period.
-            year_periods = year_dt.to_period(freq_for_year)
+            self._epoch_paths[epoch] = epoch_paths
+            self._epoch_conversions[epoch] = epoch_convs
 
-            # Iterate epochs within the year in chronological order so
-            # warnings come out in time order, matching v1 behaviour.
-            for epoch in sorted(year_periods.unique(), key=_get_period_key):
-                emask = (year_periods == epoch)
-                epoch_paths = year_paths[emask]
-                epoch_convs = year_convs[emask]
+            n_samples = len(epoch_paths)
+            if n_samples < self.min_samples:
+                warnings.warn(
+                    f"Epoch {epoch} has only {n_samples} samples "
+                    f"(min: {self.min_samples}). Results may be "
+                    f"unreliable."
+                )
 
-                self._epoch_paths[epoch] = epoch_paths
-                self._epoch_conversions[epoch] = epoch_convs
-                all_epochs.append(epoch)
+            # Inherited Shapley math. super().fit handles its own
+            # validate_data + conversion-label stripping + channel
+            # extraction + value function + normalisation.
+            result = super().fit(epoch_paths, epoch_convs)
+            self.epoch_results[epoch] = result
 
-                n_samples = len(epoch_paths)
-                if n_samples < self.min_samples:
-                    warnings.warn(
-                        f"Epoch {epoch} has only {n_samples} samples "
-                        f"(min: {self.min_samples}). Results may be "
-                        f"unreliable."
-                    )
-
-                # Inherited Shapley math. super().fit handles its own
-                # validate_data + conversion-label stripping + channel
-                # extraction + value function + normalisation.
-                result = super().fit(epoch_paths, epoch_convs)
-                self.epoch_results[epoch] = result
-
-        # Final epoch list is the wall-clock-sorted union across years.
-        # Under str-freq the list is already in order; under Mapping-freq
-        # it might not be (years processed in order but cross-year
-        # ordering is identical regardless), so sort defensively.
-        self.epochs = sorted(all_epochs, key=_get_period_key)
+        # Final epoch list is the wall-clock-sorted set of distinct epochs.
+        self.epochs = epochs
 
         # MODIFIED (Risk 5): set self.channels eagerly from the union of
         # per-epoch attribution dicts. The eager union equals the global

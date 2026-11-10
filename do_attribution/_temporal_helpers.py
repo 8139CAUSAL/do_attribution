@@ -7,7 +7,7 @@ importing them from here, while all behavior is maintained in one place.
 
 from __future__ import annotations
 
-from typing import Any, Dict, List, Mapping, Union
+from typing import Any, Callable, Dict, List, Mapping, Tuple, Union
 
 import numpy as np
 import pandas as pd
@@ -91,6 +91,64 @@ def validate_freq(
 def get_period_key(period: pd.Period) -> pd.Timestamp:
     """Return a wall-clock sort key that works across period frequencies."""
     return period.start_time
+
+
+def bin_timestamps_to_epochs(
+    dt_index: pd.DatetimeIndex,
+    resolve_freq: Callable[[int], str],
+) -> Tuple[List[pd.Period], np.ndarray]:
+    """Assign every timestamp to exactly one calendar epoch.
+
+    Each timestamp is binned with the frequency ``resolve_freq`` returns for
+    its calendar year, which is what lets a per-year frequency mapping mix
+    granularities.  A period is not confined to one calendar year, though:
+    the weekly period ``2020-12-28/2021-01-03`` holds timestamps from both
+    2020 and 2021.  The same period can therefore come out of two
+    consecutive year buckets.  Those rows belong to a single epoch, so
+    epochs are keyed by the period itself and the year buckets are merged;
+    keying by year bucket would fit the period twice and keep only the
+    later bucket's rows.
+
+    Parameters
+    ----------
+    dt_index : pd.DatetimeIndex
+        One timestamp per path.
+    resolve_freq : callable
+        Maps a calendar year to the pandas period alias used for that year.
+        It is called once per year present in ``dt_index``, in ascending
+        year order, before any epoch is returned.
+
+    Returns
+    -------
+    epochs : list[pd.Period]
+        The distinct epochs, ordered by ``start_time``.
+    codes : np.ndarray
+        For every timestamp, the position of its epoch in ``epochs``.
+    """
+    years = dt_index.year
+    codes = np.empty(len(dt_index), dtype=np.intp)
+    epoch_ids: Dict[pd.Period, int] = {}
+    for year in sorted(set(int(y) for y in years)):
+        freq_for_year = resolve_freq(year)
+        year_mask = np.asarray(years == year)
+        # Period aliases deliberately remain the legacy aliases: pandas
+        # 3 retired them for offsets but still requires them for Period.
+        year_periods = dt_index[year_mask].to_period(freq_for_year)
+        year_codes, year_uniques = pd.factorize(year_periods)
+        # Register this year's periods chronologically so that epochs with
+        # equal start times keep a deterministic year-then-time order.
+        for period in sorted(year_uniques, key=get_period_key):
+            epoch_ids.setdefault(period, len(epoch_ids))
+        year_ids = np.array(
+            [epoch_ids[period] for period in year_uniques], dtype=np.intp
+        )
+        codes[year_mask] = year_ids[year_codes]
+
+    epochs = sorted(epoch_ids, key=get_period_key)
+    position = np.empty(len(epochs), dtype=np.intp)
+    for chronological, epoch in enumerate(epochs):
+        position[epoch_ids[epoch]] = chronological
+    return epochs, position[codes]
 
 
 def periods_have_different_freq(first: Any, second: Any) -> bool:
