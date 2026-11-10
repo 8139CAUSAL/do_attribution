@@ -11,11 +11,13 @@ Locks down the v1 punch-list fixes in temporal_shapley.py:
 
 from __future__ import annotations
 
+import warnings
+
 import numpy as np
 import pandas as pd
 import pytest
 
-from do_attribution import TemporalShapleyAttribution
+from do_attribution import TemporalMarkovAttribution, TemporalShapleyAttribution
 from do_attribution.temporal_diagnostics import suggest_freq
 
 
@@ -230,6 +232,115 @@ def test_channels_eager_after_fit(small_temporal_data):
     # channels is set eagerly from per-epoch union, no lazy fit needed.
     assert set(model.channels) >= {"A", "B", "C"}
     assert model._global_fit_done is False
+
+
+# --------------------------------------------------------------------------- #
+# channels = union over EVERY fitted epoch, including unavailable ones         #
+# --------------------------------------------------------------------------- #
+def _fit_with_unavailable_epoch(model_type, conversions):
+    """Q1 holds channels A and B; Q2 holds only channel Z."""
+    paths = ["A", "A > B", "Z", "Z"]
+    timestamps = pd.to_datetime(
+        ["2025-01-05", "2025-01-06", "2025-04-05", "2025-04-06"]
+    )
+    model = model_type(freq="Q", min_samples_per_epoch=1)
+    with warnings.catch_warnings():
+        # The unavailable-normalization warnings are the scenario under test.
+        warnings.simplefilter("ignore")
+        result = model.fit(paths, timestamps, conversions)
+    return model, result
+
+
+@pytest.mark.parametrize(
+    "model_type", [TemporalShapleyAttribution, TemporalMarkovAttribution]
+)
+def test_channels_include_channel_seen_only_in_unavailable_epoch(model_type):
+    """A channel whose only epoch has no valid shares is still enumerated.
+
+    Regression: Q2 has zero conversions, so its normalization is unavailable
+    and its ``attribution`` is ``None``. ``TemporalShapleyAttribution`` built
+    ``channels`` from the per-epoch ``attribution`` dicts alone, so Z vanished
+    from ``channels``, from ``get_attribution_matrix()`` and from
+    ``to_dataframes()["attribution"]`` while staying in the raw-value matrix.
+    Both temporal models must report the same union.
+    """
+    model, result = _fit_with_unavailable_epoch(model_type, [1, 1, 0, 0])
+    q1, q2 = model.epochs
+
+    # Precondition: Z's only epoch really has no share vector.
+    assert model.epoch_results[q1]["normalization_status"] == "available"
+    assert model.epoch_results[q2]["normalization_status"] == "unavailable"
+    assert model.epoch_results[q2]["attribution"] is None
+
+    assert model.channels == ["A", "B", "Z"]
+    assert result["channels"] == ["A", "B", "Z"]
+
+    # The matrix gains an all-NaN column for Z rather than dropping it.
+    matrix = model.get_attribution_matrix()
+    assert list(matrix.index) == [q1, q2]
+    assert list(matrix.columns) == ["A", "B", "Z"]
+    assert matrix["Z"].isna().all()
+    assert matrix.loc[q2].isna().all()
+    assert matrix.loc[q1, ["A", "B"]].sum() == pytest.approx(1.0)
+
+    # to_dataframes(): "Channels absent from an epoch appear with NaN".
+    flat = model.to_dataframes()["attribution"]
+    z_rows = flat[flat["channel"] == "Z"]
+    assert list(z_rows["epoch"]) == [str(q1), str(q2)]
+    assert z_rows["attribution"].isna().all()
+
+    # The added channel carries zero volume-weighted share; total is still 1.
+    vw = model.get_volume_weighted_attribution()
+    assert set(vw) == {"A", "B", "Z"}
+    assert vw["Z"] == 0.0
+    assert sum(vw.values()) == pytest.approx(1.0, abs=1e-9)
+
+    # Eager union == global static union: the lazy global fit must not
+    # change what ``channels`` reports.
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        model.global_attribution
+    assert model.channels == ["A", "B", "Z"]
+
+
+def test_shapley_matrices_share_columns_with_unavailable_epoch():
+    """Normalized and raw Shapley matrices enumerate the same channels."""
+    model, _ = _fit_with_unavailable_epoch(
+        TemporalShapleyAttribution, [1, 1, 0, 0]
+    )
+    attribution = model.get_attribution_matrix()
+    raw = model.get_shapley_values_matrix()
+    assert list(attribution.columns) == list(raw.columns) == ["A", "B", "Z"]
+    # Z's raw value exists in Q2 even though no Q2 share does.
+    assert raw.loc[model.epochs[1], "Z"] == 0.0
+
+
+def test_attribution_matrix_is_nan_grid_when_every_epoch_unavailable():
+    """No valid shares anywhere -> epochs x channels of NaN, not an empty frame."""
+    model, result = _fit_with_unavailable_epoch(
+        TemporalShapleyAttribution, [0, 0, 0, 0]
+    )
+    assert all(
+        epoch_result["attribution"] is None
+        for epoch_result in model.epoch_results.values()
+    )
+    assert model.channels == ["A", "B", "Z"]
+
+    for matrix in (model.get_attribution_matrix(), result["attribution_matrix"]):
+        assert list(matrix.index) == model.epochs
+        assert list(matrix.columns) == ["A", "B", "Z"]
+        assert matrix.shape == (2, 3)
+        assert matrix.isna().all().all()
+
+    flat = model.to_dataframes()["attribution"]
+    assert len(flat) == 6
+    assert flat["attribution"].isna().all()
+
+    assert model.get_volume_weighted_attribution() == {
+        "A": 0.0,
+        "B": 0.0,
+        "Z": 0.0,
+    }
 
 
 # --------------------------------------------------------------------------- #
