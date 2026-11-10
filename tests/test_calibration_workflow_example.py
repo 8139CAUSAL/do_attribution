@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import ast
 from dataclasses import replace
+import json
 from pathlib import Path
 
 import numpy as np
@@ -13,6 +15,7 @@ from do_attribution.calibration import AttributionCalibration
 from examples.calibration_workflow import (
     DEFAULT_EXPERIMENT_CONFIG,
     EXPERIMENT_DESCRIPTION,
+    MARKOV_REMOVAL_STRATEGY,
     STATIC_TEST_ID,
     _fit_markov_estimates,
     construct_randomized_campaign,
@@ -256,3 +259,93 @@ def test_notebook_and_generator_share_the_workflow_module() -> None:
     assert "sys.path" not in text
     assert "Path.cwd()" not in text
     assert EXPERIMENT_DESCRIPTION in text
+
+
+# --------------------------------------------------------------------------- #
+# Published numbers are the numbers this workflow computes                     #
+# --------------------------------------------------------------------------- #
+# The notebook's saved outputs and the README example are copies of workflow
+# results.  They once kept the values of an earlier Markov removal strategy
+# after the workflow moved to ``removal_strategy="fail"``; these contracts
+# tie every published copy to the code.
+def _saved_notebook_outputs(source_marker: str) -> str:
+    """Return the saved text outputs of the code cells containing a marker."""
+    notebook = json.loads(
+        (ROOT / "examples" / "attribution_experiment_calibration.ipynb").read_text(
+            encoding="utf-8"
+        )
+    )
+    texts: list[str] = []
+    for cell in notebook["cells"]:
+        if cell["cell_type"] != "code":
+            continue
+        if source_marker not in "".join(cell["source"]):
+            continue
+        for output in cell.get("outputs", []):
+            texts.append("".join(output.get("text", "")))
+            texts.append("".join(output.get("data", {}).get("text/plain", "")))
+    assert texts, f"no executed cell contains {source_marker!r}"
+    return "\n".join(texts)
+
+
+def _notebook_number(value: float) -> str:
+    """Format a float the way the notebook's display option does."""
+    return f"{value:,.4f}"
+
+
+def test_notebook_saved_outputs_match_the_workflow(workflow) -> None:
+    static = workflow.static
+    temporal = workflow.temporal
+    assert static.attribution_model.removal_strategy == MARKOV_REMOVAL_STRATEGY
+
+    uncalibrated = _saved_notebook_outputs('name="uncalibrated_attribution"')
+    for value in static.attribution_estimates.values():
+        assert _notebook_number(value) in uncalibrated
+
+    matched = _saved_notebook_outputs('"matched_mta_estimate": [')
+    assert MARKOV_REMOVAL_STRATEGY in matched.split()
+    assert _notebook_number(static.evidence.matched_mta_estimate) in matched
+
+    evidence = _saved_notebook_outputs("static_evidence = static_workflow.evidence")
+    assert _notebook_number(static.evidence.observed_lift) in evidence
+    assert _notebook_number(static.evidence.matched_mta_estimate) in evidence
+    assert _notebook_number(static.evidence.calibration_ratio) in evidence
+
+    by_epoch = _saved_notebook_outputs("attribution_estimates_by_epoch")
+    tested_entity = DEFAULT_EXPERIMENT_CONFIG.tested_entity
+    for estimates in temporal.attribution_estimates_by_epoch.values():
+        assert _notebook_number(estimates[tested_entity]) in by_epoch
+
+    window_evidence = _saved_notebook_outputs("temporal_evidence_table = ")
+    for record in temporal.evidence:
+        assert _notebook_number(record.observed_lift) in window_evidence
+        assert _notebook_number(record.matched_mta_estimate) in window_evidence
+        assert _notebook_number(record.calibration_ratio) in window_evidence
+
+    comparison = _saved_notebook_outputs("comparison = calibration_comparison_table(")
+    for column in (
+        "experimental_lift",
+        "experimental_standard_error",
+        "true_expected_lift",
+        "matched_mta_estimate",
+        "calibration_ratio",
+        "calibrated_attribution",
+    ):
+        for value in workflow.comparison[column]:
+            assert _notebook_number(value) in comparison, column
+
+
+def test_readme_static_example_uses_the_workflow_values(workflow) -> None:
+    readme = (ROOT / "README.md").read_text(encoding="utf-8")
+    start = readme.index("attributed_conversions = {")
+    end = readme.index("}", start) + 1
+    quoted = ast.literal_eval(readme[start:end].split("=", 1)[1].strip())
+
+    static = workflow.static
+    assert quoted == {
+        entity: round(value, 4)
+        for entity, value in static.attribution_estimates.items()
+    }
+    assert f"observed_lift={static.evidence.observed_lift:.4f}," in readme
+    assert f'test_id="{STATIC_TEST_ID}"' in readme
+

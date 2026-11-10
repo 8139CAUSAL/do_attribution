@@ -283,15 +283,15 @@ the calibration notebook:
 from do_attribution import AttributionCalibration, LiftTestEvidence
 
 attributed_conversions = {
-    "Experimental Media": 1149.1519,
-    "Organic Search": 760.3327,
-    "Referral": 672.0069,
-    "Direct": 591.4872,
-    "Other": 193.9282,
-    "Paid Search": 41.3767,
-    "Organic Social": 7.8723,
-    "Affiliate": 7.6895,
-    "Email": 2.1544,
+    "Experimental Media": 1037.8436,
+    "Referral": 912.5517,
+    "Organic Search": 834.4344,
+    "Direct": 391.0936,
+    "Other": 198.3367,
+    "Paid Search": 40.5804,
+    "Email": 7.1016,
+    "Organic Social": 2.5363,
+    "Affiliate": 1.5218,
 }
 
 evidence = LiftTestEvidence(
