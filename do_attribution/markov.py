@@ -20,6 +20,13 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from ._static_export import (
+    channel_value_frame,
+    conversion_labels_cell,
+    fit_diagnostics_frame,
+    normalization_columns,
+    transition_edge_frame,
+)
 from .base import BaseAttribution
 from .normalization import normalize_signed_attribution
 from .reporting import (  # MODIFIED: distilled summary sections
@@ -144,6 +151,8 @@ class MarkovAttribution(BaseAttribution):
         self._fail_migration_warned: bool = False
         self.transition_matrix: pd.DataFrame | None = None
         self.states: List[Any] | None = None
+        # Defensive copy of the last successful fit, read by to_dataframes().
+        self._export_snapshot: Dict[str, Any] | None = None
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -302,7 +311,94 @@ class MarkovAttribution(BaseAttribution):
                 "removal effects remain available as diagnostics."
             ),
         )
+        # Snapshot for to_dataframes(): copies of the values this fit
+        # produced and the settings it ran with, so later mutation of the
+        # returned result, the model attributes, or an exported frame cannot
+        # change an export, and exporting never needs to refit.
+        self._export_snapshot = {
+            "channels": tuple(self.channels),
+            "attribution": None if attribution is None else dict(attribution),
+            "removal_effects": dict(removal_effects),
+            "diagnostics": (
+                ("model", self.__class__.__name__),
+                ("order", int(self.order)),
+                ("removal_strategy", self.removal_strategy),
+                ("separator", self.separator),
+                ("conversion_labels", conversion_labels_cell(self.conversion_labels)),
+                ("return_transition_matrix", bool(self.return_transition_matrix)),
+                ("conversion_probability", float(base_prob)),
+                *normalization_columns(normalization.diagnostics()),
+            ),
+            "transition_matrix": (
+                self.transition_matrix.copy(deep=True)
+                if self.return_transition_matrix
+                else None
+            ),
+        }
         return results
+
+    def to_dataframes(self) -> Dict[str, pd.DataFrame]:
+        """Return the last successful fit as flat pandas DataFrames.
+
+        A direct projection of the snapshot stored by :meth:`fit`.  It does
+        not refit, recompute a removal effect, render or parse ``summary()``
+        text, plot, or mutate stored state.
+
+        Returns
+        -------
+        dict[str, pd.DataFrame]
+            Deterministic keys, in this order:
+
+            - ``'attribution'`` — ``channel``, ``attribution``.  One row per
+              fitted channel.  When normalization is unavailable the rows
+              are kept and ``attribution`` is ``NaN``, which is distinct
+              from an available share of ``0.0``.
+            - ``'removal_effects'`` — ``channel``, ``removal_effect`` (raw,
+              signed under ``'fail_refit'`` / ``'detour'``; present in both
+              normalization states).
+            - ``'fit_diagnostics'`` — exactly one row: ``model``, the model
+              settings (``order``, ``removal_strategy``, ``separator``,
+              ``conversion_labels`` as a JSON list, and
+              ``return_transition_matrix``), ``conversion_probability``
+              (``P(CONVERSION | START)``), and the shared normalization
+              diagnostics ``normalization_status``,
+              ``normalization_reason``, ``normalization_denominator``,
+              ``raw_sum``, ``raw_magnitude``, and ``cancellation_ratio``
+              (``NaN`` where the fit recorded ``None``).
+            - ``'transition_matrix'`` — ``from_state``, ``to_state``,
+              ``probability``: every cell of the fitted matrix, row-major in
+              fitted state order, when the model was constructed with
+              ``return_transition_matrix=True``; an empty frame with this
+              exact schema otherwise (the key is never omitted).
+
+            Every frame is a new flat copy with a fresh ``RangeIndex`` and
+            one scalar per cell.  Channels are in sorted order.  Channel and
+            state identities are ``str``; an ``order >= 2`` tuple state is
+            rendered with ``str`` (``"('Email', 'Social')"``), matching the
+            temporal export.
+
+        Raises
+        ------
+        RuntimeError
+            If no successful fit has been run.
+        """
+        snapshot = self._export_snapshot
+        if snapshot is None:
+            raise RuntimeError(
+                "to_dataframes() requires a fitted attribution model"
+            )
+        return {
+            "attribution": channel_value_frame(
+                snapshot["channels"], snapshot["attribution"], "attribution"
+            ),
+            "removal_effects": channel_value_frame(
+                snapshot["channels"], snapshot["removal_effects"], "removal_effect"
+            ),
+            "fit_diagnostics": fit_diagnostics_frame(snapshot["diagnostics"]),
+            "transition_matrix": transition_edge_frame(
+                snapshot["transition_matrix"]
+            ),
+        }
 
     # ------------------------------------------------------------------ #
     # Internals                                                           #

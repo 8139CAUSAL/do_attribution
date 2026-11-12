@@ -834,6 +834,7 @@ class TemporalShapleyAttribution(ShapleyAttribution):
         self.value_function = {}
         self._last_attribution = {}
         self._static_reporting_snapshot = None
+        self._export_snapshot = None
         self.epoch_results = {}
         self._epoch_paths = {}
         self._epoch_conversions = {}
@@ -852,6 +853,7 @@ class TemporalShapleyAttribution(ShapleyAttribution):
         self.value_function = {}
         self._last_attribution = {}
         self._static_reporting_snapshot = None
+        self._export_snapshot = None
 
     def _calendar_epoch_source(self) -> str:
         return "mixed_calendar" if self._is_mapping_freq() else f"calendar:{self.freq}"

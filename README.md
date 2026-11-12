@@ -78,10 +78,10 @@ chronological epochs.
   or a natural-language `summary(output_format="report")` — plain Python
   strings with bounded, distilled detail tables (signed removal effects, top
   transitions and drop-offs, top coalitions, path diagnostics).
-- **Flat DataFrame export.** Temporal models expose
+- **Flat DataFrame export.** Static and temporal models expose
   `to_dataframes() -> dict[str, pd.DataFrame]`: flat, string-keyed,
-  Parquet/SQL-ready tables for attribution, raw model values, and sample
-  diagnostics — no text parsing, no `MultiIndex`, no lazy refits.
+  Parquet/SQL-ready tables for attribution, raw model values, and fit or
+  sample diagnostics — no text parsing, no `MultiIndex`, no lazy refits.
 - **Visualization.** `plot_attribution`, `plot_removal_effects`,
   `plot_transition_graph`, `plot_coalition_values`,
   `plot_attribution_comparison`, and `plot_epoch_recommendation` each return
@@ -608,6 +608,31 @@ removal effects, top transitions and drop-offs, top coalitions, path
 diagnostics) with the complete grids available programmatically via
 `to_dataframes()` and the `get_*` accessors. The reporting language is
 descriptive; it never labels a movement statistically significant or causal.
+
+`MarkovAttribution` and `ShapleyAttribution` export their last successful
+fit with the same `to_dataframes()` call the temporal models use. Each
+returns a channel/share table (`attribution`), the raw-value table
+(`removal_effects` or `shapley_values`), and a one-row `fit_diagnostics`
+table holding the model settings and the normalization status, reason, and
+numeric diagnostics. The Markov export also carries `conversion_probability`
+in that row and a flat `transition_matrix` edge table (`from_state`,
+`to_state`, `probability`), which is empty with the same columns unless the
+model was built with `return_transition_matrix=True`. When normalization is
+unavailable the channel rows stay in `attribution` with a missing share, so
+an absent share is never written as zero credit, while the raw-value table
+keeps the signed diagnostics. The tables are copies of a snapshot taken at
+fit time: exporting never refits, and editing a returned frame changes
+neither the model nor a later export. Calling it before `fit` raises
+`RuntimeError`.
+
+```python
+tables = model.to_dataframes()      # `model` is the quick-start MarkovAttribution
+list(tables)
+# ['attribution', 'removal_effects', 'fit_diagnostics', 'transition_matrix']
+
+for name, table in tables.items():
+    table.to_csv(f"markov_{name}.csv", index=False)
+```
 
 ---
 

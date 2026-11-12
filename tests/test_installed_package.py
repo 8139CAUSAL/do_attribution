@@ -12,6 +12,7 @@ import do_attribution
 REQUIRED_PACKAGE_MODULES = {
     "__init__.py",
     "_calibration_validation.py",
+    "_static_export.py",
     "_temporal_helpers.py",
     "base.py",
     "calibration.py",

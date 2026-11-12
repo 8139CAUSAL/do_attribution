@@ -48,6 +48,12 @@ import warnings
 import numpy as np
 import pandas as pd
 
+from ._static_export import (
+    channel_value_frame,
+    conversion_labels_cell,
+    fit_diagnostics_frame,
+    normalization_columns,
+)
 from .base import BaseAttribution
 from .normalization import (  # MODIFIED: get-well Unit 1 — shared policy.
     NormalizationResult,
@@ -174,6 +180,8 @@ class ShapleyAttribution(BaseAttribution):
             characteristic_function
         )
         self.value_function: Dict[Tuple[str, ...], int] = {}
+        # Defensive copy of the last successful fit, read by to_dataframes().
+        self._export_snapshot: Optional[Dict[str, Any]] = None
 
     # ------------------------------------------------------------------ #
     # Public API                                                          #
@@ -259,6 +267,7 @@ class ShapleyAttribution(BaseAttribution):
                 conv_arr,
                 attribution_note=_normalization_note(normalization),
             )
+            self._store_export_snapshot({}, normalization)
             return result
 
         # 1. Observed coalition conversion table  R(T) = sum of conversions
@@ -327,11 +336,88 @@ class ShapleyAttribution(BaseAttribution):
             model_details=details,
             attribution_note=_normalization_note(normalization),
         )
+        self._store_export_snapshot(shapley_values, normalization)
         return result
+
+    def to_dataframes(self) -> Dict[str, pd.DataFrame]:
+        """Return the last successful fit as flat pandas DataFrames.
+
+        A direct projection of the snapshot stored by :meth:`fit`.  It does
+        not refit, enumerate a coalition lattice, render or parse
+        ``summary()`` text, plot, or mutate stored state.  The potentially
+        exponential ``value_function`` dictionary stays on the fit result;
+        it is not materialized here.
+
+        Returns
+        -------
+        dict[str, pd.DataFrame]
+            Deterministic keys, in this order:
+
+            - ``'attribution'`` — ``channel``, ``attribution``.  One row per
+              fitted channel.  When normalization is unavailable the rows
+              are kept and ``attribution`` is ``NaN``, which is distinct
+              from an available share of ``0.0``.
+            - ``'shapley_values'`` — ``channel``, ``shapley_value`` (raw, on
+              the game's own scale; signed under ``'exact'``; present in
+              both normalization states).
+            - ``'fit_diagnostics'`` — exactly one row: ``model``, the model
+              settings (``separator``, ``conversion_labels`` as a JSON list,
+              and ``characteristic_function``), and the shared normalization
+              diagnostics ``normalization_status``,
+              ``normalization_reason``, ``normalization_denominator``,
+              ``raw_sum``, ``raw_magnitude``, and ``cancellation_ratio``
+              (``NaN`` where the fit recorded ``None``).
+
+            Every frame is a new flat copy with a fresh ``RangeIndex`` and
+            one scalar per cell.  Channels are ``str`` and in sorted order.
+
+        Raises
+        ------
+        RuntimeError
+            If no successful fit has been run.
+        """
+        snapshot = self._export_snapshot
+        if snapshot is None:
+            raise RuntimeError(
+                "to_dataframes() requires a fitted attribution model"
+            )
+        return {
+            "attribution": channel_value_frame(
+                snapshot["channels"], snapshot["attribution"], "attribution"
+            ),
+            "shapley_values": channel_value_frame(
+                snapshot["channels"], snapshot["shapley_values"], "shapley_value"
+            ),
+            "fit_diagnostics": fit_diagnostics_frame(snapshot["diagnostics"]),
+        }
 
     # ------------------------------------------------------------------ #
     # Internals                                                           #
     # ------------------------------------------------------------------ #
+    def _store_export_snapshot(
+        self,
+        shapley_values: Dict[str, float],
+        normalization: NormalizationResult,
+    ) -> None:
+        """Keep copies of this fit's outputs and settings for to_dataframes().
+
+        Storing copies means later mutation of the returned result, the
+        model attributes, or an exported frame cannot change an export, and
+        exporting never needs to refit or enumerate coalitions.
+        """
+        attribution = normalization.attribution
+        self._export_snapshot = {
+            "channels": tuple(self.channels),
+            "attribution": None if attribution is None else dict(attribution),
+            "shapley_values": dict(shapley_values),
+            "diagnostics": (
+                ("model", self.__class__.__name__),
+                ("separator", self.separator),
+                ("conversion_labels", conversion_labels_cell(self.conversion_labels)),
+                ("characteristic_function", self.characteristic_function),
+                *normalization_columns(normalization.diagnostics()),
+            ),
+        }
     def _cumulative_shapley_values(self) -> Dict[str, float]:
         """Shapley values of ``v(S) = sum_{T subset of S} R(T)``.
 

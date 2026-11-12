@@ -63,6 +63,23 @@ def test_quick_start_markov_output() -> None:
     )
 
 
+def test_static_export_example_output() -> None:
+    model = MarkovAttribution(
+        order=1,
+        removal_strategy="redirect_to_null",
+        conversion_labels=["Purchase"],
+        return_transition_matrix=True,
+    )
+    model.fit(JOURNEYS, CONVERSIONS)
+
+    tables = model.to_dataframes()
+
+    assert "tables = model.to_dataframes()" in README
+    assert f"# {list(tables)}" in README
+    assert 'table.to_csv(f"markov_{name}.csv", index=False)' in README
+    assert not tables["transition_matrix"].empty
+
+
 def test_quick_start_shapley_output() -> None:
     result = ShapleyAttribution(conversion_labels=["Purchase"]).fit(
         JOURNEYS, CONVERSIONS

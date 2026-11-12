@@ -107,6 +107,7 @@ from .utils import (
     to_string_array,
 )
 from .temporal import assign_paths_to_epochs, recommend_epochs
+from ._static_export import transition_edge_frame as _transition_edge_frame
 from ._temporal_helpers import (
     VALID_EPOCH_ASSIGNMENTS as _VALID_EPOCH_ASSIGNMENTS,
     align_index_to_epochs as _align_index_to_epochs,
@@ -840,20 +841,10 @@ class TemporalMarkovAttribution(MarkovAttribution):
         for epoch in self.epochs:
             if epoch not in self._epoch_transition_matrices:
                 continue
-            matrix = self.get_transition_matrix(epoch)
-            n_from, n_to = matrix.shape
-            from_states = np.array([str(s) for s in matrix.index], dtype=object)
-            to_states = np.array([str(s) for s in matrix.columns], dtype=object)
-            frames.append(
-                pd.DataFrame(
-                    {
-                        "epoch": np.full(n_from * n_to, str(epoch), dtype=object),
-                        "from_state": np.repeat(from_states, n_to),
-                        "to_state": np.tile(to_states, n_from),
-                        "probability": matrix.to_numpy(dtype=float).reshape(-1),
-                    }
-                )
-            )
+            # Same edge projection as the static export, plus the epoch.
+            edges = _transition_edge_frame(self.get_transition_matrix(epoch))
+            edges.insert(0, "epoch", np.full(len(edges), str(epoch), dtype=object))
+            frames.append(edges)
         if not frames:
             return pd.DataFrame(columns=columns)
         return pd.concat(frames, ignore_index=True)
@@ -873,6 +864,7 @@ class TemporalMarkovAttribution(MarkovAttribution):
         self.states = None
         self._last_attribution = {}
         self._static_reporting_snapshot = None
+        self._export_snapshot = None
         self.epoch_results = {}
         self._epoch_paths = {}
         self._epoch_conversions = {}
@@ -893,6 +885,7 @@ class TemporalMarkovAttribution(MarkovAttribution):
         self.states = None
         self._last_attribution = {}
         self._static_reporting_snapshot = None
+        self._export_snapshot = None
 
     def _calendar_epoch_source(self) -> str:
         return "mixed_calendar" if self._is_mapping_freq() else f"calendar:{self.freq}"
