@@ -97,6 +97,33 @@ def test_plot_attribution_renders_explicit_unavailable_state():
         _close(fig)
 
 
+@pytest.mark.parametrize(
+    "removal_strategy", ["fail", "fail_refit", "detour", "redirect_to_null"]
+)
+def test_plot_attribution_shows_unavailable_state_for_zero_conversion_markov(
+    removal_strategy,
+):
+    """A zero-conversion Markov fit plots the unavailable state, not bars."""
+    import warnings
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        res = MarkovAttribution(removal_strategy=removal_strategy).fit(
+            ["A", "B"], [0, 0]
+        )
+
+    assert res["attribution"] is None
+    fig = plot_attribution(res["attribution"], title="Zero conversions")
+    try:
+        assert isinstance(fig, Figure)
+        axis = fig.get_axes()[0]
+        rendered = "\n".join(text.get_text() for text in axis.texts)
+        assert "Normalized attribution unavailable" in rendered
+        assert not axis.patches
+    finally:
+        _close(fig)
+
+
 # --------------------------------------------------------------------------- #
 # P2 — Markov viz coverage                                                    #
 # --------------------------------------------------------------------------- #

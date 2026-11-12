@@ -380,12 +380,27 @@ legacy_refit["population_diagnostics"]["A"]["transformed_journey_count"]  # 4
 Raw effects from `fail`, `fail_refit`, and `detour` are diagnostics rather
 than probabilities. Signed effects from `fail_refit` or `detour` do not
 necessarily define a probability distribution and must not be interpreted as
-percentages. The model normalizes raw effects only when they satisfy the
-shared finite, nonnegative, bounded, unit-sum contract. If signed effects
-cancel at or below the scale-aware tolerance, `attribution` is `None`;
+percentages. Every strategy, `redirect_to_null` included, normalizes its raw
+effects through the same shared contract, and only when they satisfy its
+finite, nonnegative, bounded, unit-sum rules. `fit` always returns
 `normalization_status`, `normalization_reason`, and the raw-sum, magnitude,
-denominator, and cancellation-ratio diagnostics explain why while
-`removal_effects` remain available.
+denominator, and cancellation-ratio diagnostics. If signed effects cancel at
+or below the scale-aware tolerance, or every effect is zero (no journey
+converts, or stripping `conversion_labels` leaves no converting journey with
+a channel), `attribution` is `None` and those diagnostics explain why while
+`removal_effects` and `total_conversion_probability` remain available.
+
+> **Compatibility — `redirect_to_null`:** earlier releases substituted an
+> equal share per channel, with a `Total removal effect is 0` warning, when
+> every removal effect was zero, and did not return the normalization
+> diagnostics. Such a fit now returns `attribution=None` with
+> `normalization_reason="zero_raw_magnitude"` and no warning; temporal
+> epochs and `CompareAttribution` columns built from it hold missing shares
+> instead of equal ones. Callers that assumed `redirect_to_null` always
+> returned a dictionary need the availability check the other strategies
+> already require: test `normalization_status` (or `attribution is None`)
+> before indexing. Removal-effect mathematics, and the shares of any fit
+> with a nonzero effect, are unchanged.
 
 Higher orders (`order=2`, `order=3`, …) use sliding tuples as states; short
 paths are left-padded with `START`. `fit` returns `attribution`,

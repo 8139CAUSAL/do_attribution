@@ -41,13 +41,24 @@ def test_single_channel_paths():
     assert results["attribution"]["A"] > results["attribution"]["B"]
 
 
-def test_no_conversions_returns_unavailable_attribution():
+REMOVAL_STRATEGIES = ("fail", "fail_refit", "detour", "redirect_to_null")
+
+
+@pytest.mark.parametrize("removal_strategy", REMOVAL_STRATEGIES)
+def test_no_conversions_returns_unavailable_attribution(removal_strategy):
     paths = ["A > B", "B > C"]
     conversions = [0, 0]
 
-    model = MarkovAttribution(order=1)
-    with pytest.warns(UserWarning):
-        results = model.fit(paths, conversions)
+    model = MarkovAttribution(order=1, removal_strategy=removal_strategy)
+    if removal_strategy == "fail":
+        # Only 'fail' warns: its one-time migration notice.
+        with pytest.warns(UserWarning):
+            results = model.fit(paths, conversions)
+    else:
+        # No strategy announces a substituted allocation any more.
+        with warnings.catch_warnings():
+            warnings.simplefilter("error")
+            results = model.fit(paths, conversions)
 
     assert results["total_conversion_probability"] == 0.0
     assert results["removal_effects"] == {"A": 0.0, "B": 0.0, "C": 0.0}
@@ -58,6 +69,60 @@ def test_no_conversions_returns_unavailable_attribution():
     assert results["raw_sum"] == 0.0
     assert results["raw_magnitude"] == 0.0
     assert results["cancellation_ratio"] is None
+
+    with pytest.raises(ValueError, match="unavailable"):
+        model.get_attribution()
+
+    summary = model.summary()
+    assert (
+        "Removal effects (raw, signed); normalized attribution unavailable"
+        in summary
+    )
+    assert "Normalized attribution unavailable (zero_raw_magnitude)" in summary
+    assert "Removal effects (raw, signed) vs normalized shares" not in summary
+    assert "| Share |" not in summary
+    assert "33.33%" not in summary
+    assert (
+        "Normalized attribution unavailable (zero_raw_magnitude)"
+        in model.summary(output_format="report")
+    )
+
+
+@pytest.mark.parametrize("removal_strategy", REMOVAL_STRATEGIES)
+@pytest.mark.parametrize(
+    ("paths", "conversions", "expected_effects"),
+    [
+        # Every journey is only the endpoint token: no channel survives.
+        (["Purchase", "Purchase", "Purchase"], [1, 1, 0], {}),
+        # The only conversion sits on an endpoint-only journey, so the
+        # journeys that keep a channel never convert.
+        (["Purchase", "A > Purchase", "B"], [1, 0, 0], {"A": 0.0, "B": 0.0}),
+    ],
+)
+def test_endpoint_only_paths_after_stripping_return_unavailable_attribution(
+    removal_strategy, paths, conversions, expected_effects
+):
+    model = MarkovAttribution(
+        removal_strategy=removal_strategy, conversion_labels=["Purchase"]
+    )
+    with warnings.catch_warnings():
+        # The default strategy emits a one-time migration notice.
+        warnings.simplefilter("ignore", UserWarning)
+        results = model.fit(paths, conversions)
+
+    assert model.get_channels() == sorted(expected_effects)
+    assert results["removal_effects"] == expected_effects
+    assert results["total_conversion_probability"] == 0.0
+    assert results["attribution"] is None
+    assert results["normalization_status"] == "unavailable"
+    assert results["normalization_reason"] == "zero_raw_magnitude"
+    assert results["raw_magnitude"] == 0.0
+    with pytest.raises(ValueError, match="unavailable"):
+        model.get_attribution()
+    assert (
+        "Normalized attribution unavailable (zero_raw_magnitude)"
+        in model.summary()
+    )
 
 
 def test_all_conversions_total_prob_one():
@@ -491,6 +556,79 @@ def test_redirect_to_null_attribution_sums_to_one():
         # redirect_to_null effects are non-negative by construction
         # (mass only ever leaves the transient subsystem for NULL).
         assert 0 <= effect <= 1
+
+
+@pytest.mark.parametrize(
+    ("order", "expected_attribution", "expected_effects"),
+    [
+        (
+            1,
+            {
+                "Direct": 0.08504058755315035,
+                "Email": 0.3911867027444917,
+                "Search": 0.19134132199458836,
+                "Social": 0.3324313877077696,
+            },
+            {
+                "Direct": 0.14285714285714282,
+                "Email": 0.6571428571428571,
+                "Search": 0.3214285714285715,
+                "Social": 0.5584415584415584,
+            },
+        ),
+        (
+            2,
+            {
+                "Direct": 0.073170731707317,
+                "Email": 0.3658536585365854,
+                "Search": 0.19512195121951217,
+                "Social": 0.3658536585365854,
+            },
+            {
+                "Direct": 0.14285714285714268,
+                "Email": 0.7142857142857143,
+                "Search": 0.3809523809523809,
+                "Social": 0.7142857142857143,
+            },
+        ),
+    ],
+)
+def test_redirect_to_null_positive_effects_keep_their_shares(
+    example_paths,
+    example_conversions,
+    order,
+    expected_attribution,
+    expected_effects,
+):
+    """The shared normalizer leaves positive-effect fits numerically as they
+    were under the strategy's former private normalization."""
+    result = MarkovAttribution(
+        order=order,
+        removal_strategy="redirect_to_null",
+        conversion_labels=["Purchase"],
+    ).fit(example_paths, example_conversions)
+
+    assert result["attribution"] == pytest.approx(
+        expected_attribution, abs=1e-12
+    )
+    assert result["removal_effects"] == pytest.approx(
+        expected_effects, abs=1e-12
+    )
+    assert result["total_conversion_probability"] == pytest.approx(
+        0.7, abs=1e-12
+    )
+
+    raw_sum = sum(result["removal_effects"].values())
+    for channel, effect in result["removal_effects"].items():
+        assert result["attribution"][channel] == pytest.approx(
+            effect / raw_sum, abs=1e-12
+        )
+    assert result["normalization_status"] == "available"
+    assert result["normalization_reason"] is None
+    assert result["normalization_denominator"] == pytest.approx(raw_sum)
+    assert result["raw_sum"] == pytest.approx(raw_sum)
+    assert result["raw_magnitude"] == pytest.approx(raw_sum)
+    assert result["cancellation_ratio"] == pytest.approx(1.0)
 
 
 def test_redirect_to_null_preserves_row_sums():

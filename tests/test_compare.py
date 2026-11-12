@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import warnings
+
 import pytest
 
 from do_attribution import (
@@ -57,6 +59,35 @@ def test_unavailable_model_column_is_nan_not_zero(
     assert unavailable["shapley"] == "near_cancellation"
     assert frame["shapley"].isna().all()
     assert not (frame["shapley"] == 0.0).any()
+
+
+@pytest.mark.parametrize(
+    "removal_strategy", ["fail", "fail_refit", "detour", "redirect_to_null"]
+)
+def test_zero_conversion_markov_column_is_missing_not_equal_shares(
+    removal_strategy,
+):
+    """With no removal effect to normalize, Markov is as unavailable as
+    Shapley for the same inputs instead of reporting an equal split."""
+    cmp_ = CompareAttribution(markov_removal_strategy=removal_strategy)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        results = cmp_.fit(["A", "B"], [0, 0])
+
+    assert results["markov"]["attribution"] is None
+    assert results["markov"]["removal_effects"] == {"A": 0.0, "B": 0.0}
+    assert results["markov"]["total_conversion_probability"] == 0.0
+    assert cmp_.unavailable_models() == {
+        "markov": "zero_raw_magnitude",
+        "shapley": "zero_raw_magnitude",
+    }
+
+    frame = cmp_.attribution_frame()
+    assert list(frame.index) == ["A", "B"]
+    assert frame["markov"].isna().all()
+    assert frame["shapley"].isna().all()
+    assert not (frame["markov"] == 0.5).any()
+    assert cmp_.difference_frame("markov")["shapley_minus_markov"].isna().all()
 
 
 def test_difference_frame_vs_markov_reference(example_paths, example_conversions):

@@ -179,6 +179,11 @@ class MarkovAttribution(BaseAttribution):
                 or ``None`` when raw effects cannot be normalized safely
               - ``'removal_effects'``     : dict[str, float] (raw)
               - ``'total_conversion_probability'`` : float
+              - ``'normalization_status'``, ``'normalization_reason'``,
+                ``'normalization_denominator'``, ``'raw_sum'``,
+                ``'raw_magnitude'``, ``'cancellation_ratio'`` : the shared
+                normalization diagnostics, populated for every removal
+                strategy whether or not ``'attribution'`` is available
               - ``'transition_matrix'``   : DataFrame (only if requested)
               - ``'population_diagnostics'`` : per-channel journey-count,
                 total-weight, and empty-path diagnostics for ``fail`` and
@@ -252,29 +257,13 @@ class MarkovAttribution(BaseAttribution):
             weights_arr,
         )
 
-        normalization = None
-        if self.removal_strategy in {"fail", "fail_refit", "detour"}:
-            # Raw effects remain separate diagnostics for every path-refit
-            # strategy. Route them through the same scale-aware guard as
-            # Shapley so signed, zero, or near-cancelling values cannot be
-            # presented as a share vector.
-            normalization = normalize_signed_attribution(removal_effects)
-            attribution = normalization.attribution
-        else:
-            total_effect = sum(removal_effects.values())
-            if total_effect > 0:
-                attribution = {
-                    ch: eff / total_effect for ch, eff in removal_effects.items()
-                }
-            else:
-                attribution = {
-                    ch: 1.0 / len(self.channels) if self.channels else 0.0
-                    for ch in self.channels
-                }
-                if self.channels:
-                    warnings.warn(
-                        "Total removal effect is 0. Using equal attribution."
-                    )
+        # Raw effects remain separate diagnostics for every removal
+        # strategy, 'redirect_to_null' included. Route them through the same
+        # scale-aware guard as Shapley so signed, zero, or near-cancelling
+        # values cannot be presented as a share vector. No equal-share
+        # fallback is substituted when there is no effect to normalize.
+        normalization = normalize_signed_attribution(removal_effects)
+        attribution = normalization.attribution
 
         results: Dict[str, Any] = {
             "attribution": attribution,
@@ -292,8 +281,7 @@ class MarkovAttribution(BaseAttribution):
                     else self.removal_strategy
                 )
             )
-        if normalization is not None:
-            results.update(normalization.diagnostics())
+        results.update(normalization.diagnostics())
         if self.return_transition_matrix:
             results["transition_matrix"] = self.transition_matrix
         self._last_attribution = attribution
@@ -311,7 +299,7 @@ class MarkovAttribution(BaseAttribution):
             model_details=details,
             attribution_note=(
                 None
-                if normalization is None or normalization.available
+                if normalization.available
                 else "Normalized attribution unavailable "
                 f"({normalization.normalization_reason}). Raw signed "
                 "removal effects remain available as diagnostics."

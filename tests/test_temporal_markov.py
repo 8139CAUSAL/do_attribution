@@ -85,6 +85,59 @@ def test_detour_near_cancellation_remains_diagnostic_in_temporal_consumers():
     )
 
 
+@pytest.mark.parametrize(
+    "removal_strategy", ["fail", "fail_refit", "detour", "redirect_to_null"]
+)
+@pytest.mark.parametrize("fit_mode", ["calendar", "labels"])
+def test_zero_conversion_epoch_rows_are_missing_not_equal_shares(
+    removal_strategy, fit_mode
+):
+    # Q1 never converts; Q2 has an effect to normalize under every strategy.
+    paths = ["A", "B", "A > B", "A", "B"]
+    dates = pd.to_datetime(
+        ["2025-01-10", "2025-01-11", "2025-04-10", "2025-04-11", "2025-04-12"]
+    )
+    conversions = [0, 0, 1, 0, 0]
+    model = TemporalMarkovAttribution(
+        freq="Q",
+        min_samples_per_epoch=1,
+        removal_strategy=removal_strategy,
+    )
+
+    if fit_mode == "calendar":
+        result = model.fit(paths, dates, conversions)
+    else:
+        result = model.fit_by_epoch(paths, dates, conversions)
+    zero_epoch, converting_epoch = result["epochs"]
+    zero_result = result["epoch_attributions"][zero_epoch]
+
+    assert zero_result["attribution"] is None
+    assert zero_result["normalization_status"] == "unavailable"
+    assert zero_result["normalization_reason"] == "zero_raw_magnitude"
+    assert zero_result["removal_effects"] == {"A": 0.0, "B": 0.0}
+    assert zero_result["total_conversion_probability"] == 0.0
+
+    matrix = result["attribution_matrix"]
+    assert list(matrix.columns) == ["A", "B"]
+    assert matrix.loc[zero_epoch].isna().all()
+    assert matrix.loc[converting_epoch].notna().all()
+    assert matrix.loc[converting_epoch].sum() == pytest.approx(1.0)
+    assert np.isnan(model.get_trend("A").loc[zero_epoch])
+    assert (result["removal_effect_matrix"].loc[zero_epoch] == 0.0).all()
+
+    exported = model.to_dataframes()["attribution"]
+    zero_rows = exported[exported["epoch"] == str(zero_epoch)]
+    assert list(zero_rows["channel"]) == ["A", "B"]
+    assert zero_rows["attribution"].isna().all()
+    assert exported.loc[
+        exported["epoch"] == str(converting_epoch), "attribution"
+    ].sum() == pytest.approx(1.0)
+
+    summary = model.summary()
+    assert "Normalized attribution unavailable by epoch" in summary
+    assert "zero_raw_magnitude" in summary
+
+
 # --------------------------------------------------------------------------- #
 # Risk 1 — epoch_assignment validation                                         #
 # --------------------------------------------------------------------------- #
