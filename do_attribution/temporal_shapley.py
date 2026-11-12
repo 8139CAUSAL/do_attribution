@@ -902,10 +902,16 @@ class TemporalShapleyAttribution(ShapleyAttribution):
         )
 
     def _channels_from_epochs(self) -> List[str]:
-        """Sorted union of channels seen across all per-epoch results."""
+        """Sorted union of channels across all per-epoch results.
+
+        The raw ``shapley_values`` keys are included because ``attribution``
+        is ``None`` when an epoch's normalization is unavailable; a channel
+        observed only in such epochs must still be enumerated.
+        """
         all_channels: set = set()
         for result in self.epoch_results.values():
-            all_channels.update(_epoch_attribution(result).keys())
+            all_channels.update(_epoch_attribution(result))
+            all_channels.update(result.get("shapley_values", {}))
         return sorted(all_channels)
 
     # ------------------------------------------------------------------ #
