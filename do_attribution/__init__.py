@@ -78,6 +78,7 @@ from .utils import (
     create_n_order_states,
     extract_channels,
     get_powerset,
+    prepare_journey_data,
     split_path,
     strip_conversion_labels,  # MODIFIED: P0 export.
     strip_conversion_labels_array,  # MODIFIED: P0 export.
@@ -137,6 +138,7 @@ __all__ = [
     "create_n_order_states",
     "extract_channels",
     "get_powerset",
+    "prepare_journey_data",
     "split_path",
     "strip_conversion_labels",  # MODIFIED: P0 export.
     "strip_conversion_labels_array",  # MODIFIED: P0 export.

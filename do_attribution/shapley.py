@@ -61,11 +61,9 @@ from .utils import (
     DEFAULT_SEPARATOR,
     extract_channels,
     get_powerset,
+    prepare_journey_data,
     split_path,
     strip_conversion_labels_array,  # MODIFIED: P0.
-    to_int_array,
-    to_string_array,
-    validate_data,
 )
 
 
@@ -228,10 +226,9 @@ class ShapleyAttribution(BaseAttribution):
         Attributed conversions must not be computed from ``attribution``
         unless ``normalization_status == 'available'``.
         """
-        paths_arr = to_string_array(paths)
-        conv_arr = to_int_array(conversions)
-
-        validate_data(paths_arr, conv_arr)
+        # Shared preparation path: container shape and binary outcomes are
+        # validated on the supplied values, before any coercion.
+        paths_arr, conv_arr = prepare_journey_data(paths, conversions)
         # MODIFIED (P0): strip conversion-endpoint tokens up front so no
         # downstream code path — channel enumeration, coalition keys, value
         # function lookups, attribution normalisation — ever sees them.

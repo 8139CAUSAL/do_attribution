@@ -102,10 +102,9 @@ import pandas as pd
 from .markov import MarkovAttribution
 from .utils import (
     DEFAULT_SEPARATOR,
+    prepare_journey_data,
     split_path,
-    to_int_array,
     to_string_array,
-    validate_data,
 )
 from .temporal import assign_paths_to_epochs, recommend_epochs
 from ._temporal_helpers import (
@@ -377,9 +376,9 @@ class TemporalMarkovAttribution(MarkovAttribution):
         """
         self._check_epoch_assignment_supported()
 
-        paths_arr = to_string_array(paths)
-        conv_arr = to_int_array(conversions)
-        validate_data(paths_arr, conv_arr)
+        # Shared preparation path: the supplied outcomes are validated
+        # before coercion, ahead of any per-epoch dispatch.
+        paths_arr, conv_arr = prepare_journey_data(paths, conversions)
 
         if len(timestamps) != len(paths_arr):
             raise ValueError(
@@ -526,9 +525,9 @@ class TemporalMarkovAttribution(MarkovAttribution):
         """
         self._check_epoch_assignment_supported()
 
-        paths_arr = to_string_array(paths)
-        conv_arr = to_int_array(conversions)
-        validate_data(paths_arr, conv_arr)
+        # Shared preparation path: the supplied outcomes are validated
+        # before coercion, ahead of any per-epoch dispatch.
+        paths_arr, conv_arr = prepare_journey_data(paths, conversions)
 
         if isinstance(epochs, (np.ndarray, pd.Series)):
             epochs_arr = np.asarray(epochs).flatten()

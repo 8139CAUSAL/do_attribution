@@ -30,10 +30,8 @@ from .utils import (
     DEFAULT_SEPARATOR,
     create_n_order_states,
     extract_channels,
+    prepare_journey_data,
     strip_conversion_labels_array,  # MODIFIED: P0 — strip endpoint tokens up front.
-    to_int_array,
-    to_string_array,
-    validate_data,
 )
 
 WeightedStateSequence = Tuple[List[Any], int, float]
@@ -189,10 +187,9 @@ class MarkovAttribution(BaseAttribution):
                 total-weight, and empty-path diagnostics for ``fail`` and
                 ``fail_refit``
         """
-        paths_arr = to_string_array(paths)
-        conversions_arr = to_int_array(conversions)
-
-        validate_data(paths_arr, conversions_arr)
+        # Shared preparation path: container shape and binary outcomes are
+        # validated on the supplied values, before any coercion.
+        paths_arr, conversions_arr = prepare_journey_data(paths, conversions)
         if (
             self.removal_strategy == "fail"
             and not self._fail_migration_warned

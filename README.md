@@ -214,7 +214,24 @@ conversion can be credited to a channel — so code that must handle that case
 should check `normalization_status` before indexing it.
 
 Lists, NumPy arrays, and pandas Series all work as path and conversion
-inputs.
+inputs. Both must be one-dimensional: a bare string, a scalar, or a nested or
+two-dimensional container raises instead of being read as a collection of
+journeys. Each conversion outcome must be exactly `0` or `1`. Integers,
+booleans, and the exact numeric values `0.0` / `1.0` are accepted in any of
+those containers. The canonical strings `"0"` and `"1"` (text or bytes)
+remain accepted as well; no other spelling (`" 1"`, `"01"`, `"1.0"`,
+`"true"`) is. Every `fit` entry point — static, temporal (`fit` and
+`fit_by_epoch`), and `CompareAttribution` — and the `validate_data` /
+`to_int_array` helpers check the supplied values before integer conversion
+and raise a `ValueError` naming the position and the original value for a
+fractional, out-of-range, missing (`None`, `NaN`, `pd.NA`), or non-finite
+outcome.
+
+> **Compatibility — binary outcomes:** this enforces the existing
+> binary-outcome contract. Earlier releases cast outcomes to integers before
+> checking them, so `[0.9, 1.9]` was silently fitted as `[0, 1]`. Callers
+> passing probabilities or fractional counts must supply valid `0`/`1`
+> journey outcomes rather than relying on truncation.
 
 ---
 

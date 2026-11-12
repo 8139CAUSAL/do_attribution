@@ -13,12 +13,16 @@ these containers interchangeably.
 
 from __future__ import annotations
 
+from decimal import Decimal
 from itertools import chain, combinations
+import math
+from numbers import Real
 from typing import (
     Any,
     Iterable,
     Iterator,
     List,
+    Optional,
     Sequence,
     Set,
     Tuple,
@@ -39,29 +43,205 @@ DEFAULT_SEPARATOR: str = " > "
 # --------------------------------------------------------------------------- #
 # Input coercion                                                              #
 # --------------------------------------------------------------------------- #
+_NESTED_CONTAINER_TYPES = (
+    list,
+    tuple,
+    set,
+    frozenset,
+    dict,
+    np.ndarray,
+    pd.Series,
+    pd.Index,
+    pd.DataFrame,
+)
+
+_MAX_VALUE_REPR = 120
+
+
+def _value_repr(value: Any) -> str:
+    """Render an offending input value for an error message."""
+    if isinstance(value, np.generic):
+        value = value.item()
+    text = repr(value)
+    if len(text) > _MAX_VALUE_REPR:
+        text = text[: _MAX_VALUE_REPR - 3] + "..."
+    return text
+
+
+def _one_dimensional_values(values: Any, name: str) -> List[Any]:
+    """Return a one-dimensional input container as a flat Python list.
+
+    The container shape is checked on the supplied object, before any
+    element is stringified or cast, so a bare string, a scalar, or a nested
+    or multi-dimensional container is rejected instead of being read as a
+    collection of journeys or outcomes.
+
+    Raises
+    ------
+    TypeError
+        If ``values`` is ``None``, a bare ``str`` / ``bytes``, or a scalar.
+    ValueError
+        If ``values`` is not one-dimensional or holds a nested container.
+    """
+    if isinstance(values, pd.DataFrame):
+        raise ValueError(
+            f"{name} must be one-dimensional, got a DataFrame with shape "
+            f"{values.shape}"
+        )
+    if isinstance(values, (pd.Series, pd.Index)):
+        items = values.tolist()
+    elif isinstance(values, np.ndarray):
+        if values.ndim != 1:
+            raise ValueError(
+                f"{name} must be one-dimensional, got an array with shape "
+                f"{values.shape}"
+            )
+        items = values.tolist()
+    elif (
+        values is None
+        or isinstance(values, (str, bytes))
+        or not isinstance(values, Iterable)
+    ):
+        raise TypeError(
+            f"{name} must be a one-dimensional list, tuple, NumPy array, or "
+            f"pandas Series, not a bare {type(values).__name__}: "
+            f"{_value_repr(values)}"
+        )
+    else:
+        items = list(values)
+    for index, item in enumerate(items):
+        if isinstance(item, _NESTED_CONTAINER_TYPES):
+            raise ValueError(
+                f"{name} must be one-dimensional; the entry at index "
+                f"{index} is a nested {type(item).__name__}: "
+                f"{_value_repr(item)}"
+            )
+    return items
+
+
+def _string_array(values: List[Any]) -> np.ndarray:
+    """Stringify already shape-checked path values."""
+    # Pandas nullable containers can materialize ``None`` as ``nan``.  Treat
+    # all scalar missing values as the established empty-path representation.
+    cleaned = ["" if p is None or (not isinstance(p, (list, tuple, dict)) and pd.isna(p)) else str(p) for p in values]
+    return np.array(cleaned, dtype=object)
+
+
 def to_string_array(paths: Union[Sequence[str], np.ndarray, pd.Series]) -> np.ndarray:
     """Coerce a list / Series / ndarray of paths into a 1-D string ndarray.
 
     ``None`` values are replaced with the empty string; all other values are
     passed through :pyfunc:`str`.
+
+    The container must be one-dimensional.  A bare string, a scalar, or a
+    nested / multi-dimensional container raises (see
+    :func:`_one_dimensional_values`) rather than being stringified into a
+    collection of journeys.
     """
-    if isinstance(paths, pd.Series):
-        paths = paths.tolist()
-    elif isinstance(paths, np.ndarray):
-        paths = paths.tolist()
-    # Pandas nullable containers can materialize ``None`` as ``nan``.  Treat
-    # all scalar missing values as the established empty-path representation.
-    cleaned = ["" if p is None or (not isinstance(p, (list, tuple, dict)) and pd.isna(p)) else str(p) for p in paths]
-    return np.array(cleaned, dtype=object)
+    return _string_array(_one_dimensional_values(paths, "paths"))
+
+
+def _is_missing_scalar(value: Any) -> bool:
+    """``True`` for ``None``, ``NaN``, ``pd.NA``, ``pd.NaT`` and the like."""
+    if value is None:
+        return True
+    try:
+        return bool(pd.isna(value))
+    except (TypeError, ValueError, ArithmeticError):
+        return False
+
+
+def _is_infinite_scalar(value: Any) -> bool:
+    try:
+        return bool(math.isinf(value))
+    except (TypeError, ValueError, OverflowError):
+        return False
+
+
+def _binary_outcome(value: Any, index: int) -> int:
+    """Validate one supplied conversion outcome and return it as ``0``/``1``.
+
+    The check runs on the original value, before any integer conversion:
+
+    * booleans, integers, and other real numbers are accepted only when
+      they equal exactly ``0`` or ``1`` (``0.0`` / ``1.0`` included);
+    * the canonical strings ``"0"`` and ``"1"`` (``str`` or ``bytes``) are
+      accepted, preserving what plain integer coercion took; any other
+      spelling (``" 1"``, ``"01"``, ``"1.0"``, ``"true"``) is rejected;
+    * missing, non-finite, fractional, out-of-range, and non-numeric
+      values are rejected.
+    """
+    if isinstance(value, str):
+        if value == "0":
+            return 0
+        if value == "1":
+            return 1
+    elif isinstance(value, bytes):
+        if value == b"0":
+            return 0
+        if value == b"1":
+            return 1
+    elif isinstance(value, (Real, Decimal, np.bool_)):
+        try:
+            if value == 0:
+                return 0
+            if value == 1:
+                return 1
+        except ArithmeticError:
+            # A signalling ``Decimal`` NaN refuses comparison.
+            pass
+
+    if _is_missing_scalar(value):
+        detail = f"missing value {_value_repr(value)}"
+    elif _is_infinite_scalar(value):
+        detail = f"non-finite value {_value_repr(value)}"
+    else:
+        detail = _value_repr(value)
+    raise ValueError(f"Conversion at index {index} must be 0 or 1, got {detail}")
+
+
+def _binary_int_array(values: List[Any]) -> np.ndarray:
+    """Validate already shape-checked outcomes, then convert them to int."""
+    return np.array(
+        [_binary_outcome(value, index) for index, value in enumerate(values)],
+        dtype=int,
+    )
+
+
+def _plain_binary_array(conversions: Any) -> Optional[np.ndarray]:
+    """Vectorised acceptance of an all-0/1 numeric NumPy array or Series.
+
+    Returns the outcomes as a new int array only when ``conversions`` is a
+    one-dimensional boolean / integer / float NumPy array (or a Series
+    backed by one) whose every value is exactly ``0`` or ``1``.  Anything
+    else returns ``None`` so the per-value path decides and reports: this
+    shortcut never rejects and never builds an error message.
+    """
+    values = conversions.to_numpy() if isinstance(conversions, pd.Series) else conversions
+    if (
+        not isinstance(values, np.ndarray)
+        or values.ndim != 1
+        or values.dtype.kind not in "biuf"
+    ):
+        return None
+    if not ((values == 0) | (values == 1)).all():
+        return None
+    return values.astype(int)
 
 
 def to_int_array(conversions: Union[Sequence[int], np.ndarray, pd.Series]) -> np.ndarray:
-    """Coerce conversion flags to a 1-D int ndarray."""
-    if isinstance(conversions, pd.Series):
-        conversions = conversions.tolist()
-    elif isinstance(conversions, np.ndarray):
-        conversions = conversions.tolist()
-    return np.array(conversions, dtype=int)
+    """Validate binary conversion flags and coerce them to a 1-D int ndarray.
+
+    Each supplied value is validated *before* integer conversion, so a
+    fractional, out-of-range, missing, or non-finite outcome raises
+    ``ValueError`` naming its position and original value instead of being
+    truncated into a different dataset.  See :func:`prepare_journey_data`
+    for the accepted values.
+    """
+    plain = _plain_binary_array(conversions)
+    if plain is not None:
+        return plain
+    return _binary_int_array(_one_dimensional_values(conversions, "conversions"))
 
 
 # --------------------------------------------------------------------------- #
@@ -197,38 +377,89 @@ def strip_conversion_labels_array(
     return out
 
 
+def prepare_journey_data(
+    paths: Union[Sequence[str], np.ndarray, pd.Series],
+    conversions: Union[Sequence[int], np.ndarray, pd.Series],
+) -> Tuple[np.ndarray, np.ndarray]:
+    """Validate the aligned (paths, conversions) pair, then coerce both.
+
+    This is the single preparation path shared by every model ``fit`` entry
+    point and by :func:`validate_data`.  All checks run on the supplied
+    values, before paths are stringified or outcomes are cast to integers:
+
+    1. both containers must be one-dimensional (a bare string, a scalar, or
+       a nested / multi-dimensional container is rejected);
+    2. the lengths must match and be non-zero;
+    3. every conversion outcome must be exactly ``0`` or ``1``.
+
+    Accepted outcomes are booleans, integers, and other real numbers equal
+    to exactly ``0`` or ``1`` (so ``0.0`` / ``1.0``), plus the canonical
+    strings ``"0"`` and ``"1"``.  Fractional, out-of-range, missing
+    (``None``, ``NaN``, ``pd.NA``), non-finite, and otherwise non-binary
+    values are rejected; nothing is truncated or rounded.
+
+    Returns
+    -------
+    paths : numpy.ndarray
+        1-D object array of path strings (missing paths become ``""``).
+    conversions : numpy.ndarray
+        1-D integer array of ``0`` / ``1`` outcomes.
+
+    Raises
+    ------
+    TypeError
+        If either argument is ``None``, a bare string, or a scalar.
+    ValueError
+        If either argument is not one-dimensional, the lengths differ, no
+        paths are supplied, or a conversion outcome is not exactly ``0`` or
+        ``1``.  The message names the offending position and the original
+        value.
+    """
+    path_values = _one_dimensional_values(paths, "paths")
+    plain = _plain_binary_array(conversions)
+    conversion_values = (
+        plain
+        if plain is not None
+        else _one_dimensional_values(conversions, "conversions")
+    )
+
+    if len(path_values) != len(conversion_values):
+        raise ValueError(
+            f"Paths ({len(path_values)}) and conversions "
+            f"({len(conversion_values)}) must have same length"
+        )
+    if len(path_values) == 0:
+        raise ValueError("No paths provided")
+    conv_arr = (
+        plain if plain is not None else _binary_int_array(conversion_values)
+    )
+    paths_arr = _string_array(path_values)
+    empty_count = sum(1 for p in paths_arr if not p or not p.strip())
+    if empty_count > 0:
+        warnings.warn(
+            f"Found {empty_count} empty paths which will be ignored"
+        )
+    return paths_arr, conv_arr
+
+
 def validate_data(
     paths: Union[Sequence[str], np.ndarray, pd.Series],
     conversions: Union[Sequence[int], np.ndarray, pd.Series],
 ) -> None:
     """Validate the aligned (paths, conversions) pair.
 
+    Runs the shared :func:`prepare_journey_data` checks on the supplied
+    values and discards the coerced arrays.
+
     Raises
     ------
+    TypeError
+        If either argument is ``None``, a bare string, or a scalar.
     ValueError
-        If lengths differ, the list is empty, or a conversion flag is not
-        exactly ``0`` or ``1``.
+        If either argument is not one-dimensional, lengths differ, the list
+        is empty, or a conversion flag is not exactly ``0`` or ``1``.
     """
-    paths_arr = to_string_array(paths)
-    conv_arr = to_int_array(conversions)
-
-    if len(paths_arr) != len(conv_arr):
-        raise ValueError(
-            f"Paths ({len(paths_arr)}) and conversions ({len(conv_arr)}) "
-            "must have same length"
-        )
-    if len(paths_arr) == 0:
-        raise ValueError("No paths provided")
-    for i, conv in enumerate(conv_arr.tolist()):
-        if conv not in (0, 1):
-            raise ValueError(
-                f"Conversion at index {i} must be 0 or 1, got {conv}"
-            )
-    empty_count = sum(1 for p in paths_arr if not p or not p.strip())
-    if empty_count > 0:
-        warnings.warn(
-            f"Found {empty_count} empty paths which will be ignored"
-        )
+    prepare_journey_data(paths, conversions)
 
 
 # --------------------------------------------------------------------------- #
@@ -290,6 +521,7 @@ __all__ = [
     "to_int_array",
     "split_path",
     "extract_channels",
+    "prepare_journey_data",
     "validate_data",
     "create_n_order_states",
     "get_powerset",
