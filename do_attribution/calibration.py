@@ -8713,6 +8713,9 @@ class TemporalCalibrationResult:
             )
             strength_ax.set_title("Explicit Evidence Strength Schedule")
             strength_ax.legend(loc="best")
+            strength_ax.set_ylabel("Strength or ratio")
+            strength_ax.set_xlabel("Tested entity / authoritative epoch")
+            strength_ax.grid(axis="y", alpha=0.2)
         else:
             strength_ax.text(
                 0.5,
@@ -8724,9 +8727,10 @@ class TemporalCalibrationResult:
                 va="center",
             )
             strength_ax.set_title("Evidence Strength Not Applicable")
-        strength_ax.set_ylabel("Strength or ratio")
-        strength_ax.set_xlabel("Tested entity / authoritative epoch")
-        strength_ax.grid(axis="y", alpha=0.2)
+            # The panel states a fact and plots nothing.  A value scale, axis
+            # labels or a grid would present it as an empty data plot.
+            strength_ax.set_xticks([])
+            strength_ax.set_yticks([])
 
         diagnostic_values: list[
             tuple[tuple[Entity, Epoch], str, float | None]
@@ -8997,7 +9001,16 @@ class TemporalCalibrationResult:
             diagnostic_ax.set_xticklabels(
                 [f"{entity} / {epoch}" for entity, epoch in requested_pairs]
             )
+            # One band per requested pair, centered on its tick.  Left to
+            # autoscale, the limits shrink to the markers themselves: with a
+            # single pair the applied ratio and its alternatives land on
+            # opposite edges of the panel and read as separate categories.
+            diagnostic_ax.set_xlim(-0.5, len(requested_pairs) - 0.5)
             diagnostic_ax.legend(loc="best")
+            diagnostic_ax.axhline(1.0, color="black", linewidth=0.8, alpha=0.7)
+            diagnostic_ax.set_xlabel("Tested entity / authoritative epoch")
+            diagnostic_ax.set_ylabel("Ratio")
+            diagnostic_ax.grid(axis="y", alpha=0.2)
         else:
             diagnostic_ax.text(
                 0.5,
@@ -9008,13 +9021,21 @@ class TemporalCalibrationResult:
                 ha="center",
                 va="center",
             )
-        diagnostic_ax.axhline(1.0, color="black", linewidth=0.8, alpha=0.7)
+            # As above: a statement, not an empty data plot.
+            diagnostic_ax.set_xticks([])
+            diagnostic_ax.set_yticks([])
         diagnostic_ax.set_title(
             "Applied Ratios and Explicitly Requested Diagnostic Alternatives"
         )
-        diagnostic_ax.set_xlabel("Tested entity / authoritative epoch")
-        diagnostic_ax.set_ylabel("Ratio")
-        diagnostic_ax.grid(axis="y", alpha=0.2)
+        # A panel that only carries a statement is a short strip; the room
+        # goes to the panel that plots values.  Two panels of the same kind
+        # share the figure equally.
+        strength_ax.get_gridspec().set_height_ratios(
+            [
+                3 if self.ratio_policy == "explicit_strength" else 1,
+                3 if diagnostic_values else 1,
+            ]
+        )
         fig.tight_layout()
         return fig
 

@@ -230,3 +230,167 @@ def test_material_diagnostic_inputs_are_never_ignored() -> None:
         result.plot_evidence_strength(
             diagnostic_conflict_policies={("A", "E1"): ("pooled_lift",)}
         )
+
+
+def _two_epoch_coordinate_linear_result():
+    return TemporalAttributionCalibration(
+        [_evidence("a-left", 0.8, coordinate=0.0), _evidence("a-right", 1.2, coordinate=10.0)]
+    ).apply_estimates(
+        {
+            "E1": {"A": 100.0, "B": 100.0},
+            "E2": {"A": 100.0, "B": 100.0},
+        },
+        ratio_policy="coordinate_linear",
+        epoch_ratio_policy="coordinate_average",
+        residual_policy="allow_total_change",
+        epoch_windows={"E1": (0.0, 5.0), "E2": (5.0, 10.0)},
+    )
+
+
+def _marker_positions(ax):
+    return [
+        x
+        for collection in ax.collections
+        if not collection.get_label().startswith("_")
+        for x, _ in collection.get_offsets().tolist()
+    ]
+
+
+def test_one_requested_pair_keeps_its_markers_beside_its_tick() -> None:
+    """Autoscaled limits put one pair's markers on opposite panel edges."""
+    result = _two_epoch_coordinate_linear_result()
+
+    figure = result.plot_evidence_strength(
+        diagnostic_epoch_ratio_policies={
+            ("A", "E1"): ("representative_coordinate", "coordinate_average")
+        },
+        diagnostic_epoch_coordinates={"E1": 1.0},
+    )
+    try:
+        diagnostic_ax = figure.axes[1]
+        assert diagnostic_ax.get_xlim() == (-0.5, 0.5)
+        assert list(diagnostic_ax.get_xticks()) == [0]
+        assert [tick.get_text() for tick in diagnostic_ax.get_xticklabels()] == [
+            "A / E1"
+        ]
+        positions = _marker_positions(diagnostic_ax)
+        assert len(positions) == 3
+        # Every marker is within a quarter band of the tick it belongs to.
+        assert all(abs(position) < 0.25 for position in positions)
+    finally:
+        plt.close(figure)
+
+
+def test_each_requested_pair_has_its_own_band() -> None:
+    result = _two_epoch_coordinate_linear_result()
+
+    figure = result.plot_evidence_strength(
+        diagnostic_epoch_ratio_policies={
+            ("A", "E1"): ("representative_coordinate",),
+            ("A", "E2"): ("representative_coordinate",),
+        },
+        diagnostic_epoch_coordinates={"E1": 1.0, "E2": 9.0},
+    )
+    try:
+        diagnostic_ax = figure.axes[1]
+        assert diagnostic_ax.get_xlim() == (-0.5, 1.5)
+        assert [tick.get_text() for tick in diagnostic_ax.get_xticklabels()] == [
+            "A / E1",
+            "A / E2",
+        ]
+        values = _collection_values(diagnostic_ax)
+        assert values["Stored applied effective ratio"] == pytest.approx([0.9, 1.1])
+        assert values[
+            "Diagnostic only — not applied: representative_coordinate"
+        ] == pytest.approx([0.84, 1.16])
+        positions = sorted(_marker_positions(diagnostic_ax))
+        assert [round(position) for position in positions] == [0, 0, 1, 1]
+        assert all(
+            abs(position - round(position)) < 0.25 for position in positions
+        )
+    finally:
+        plt.close(figure)
+
+
+def _is_statement_panel(ax) -> bool:
+    """A panel that states a fact carries no scale, axis label or data line."""
+    return (
+        list(ax.get_xticks()) == []
+        and list(ax.get_yticks()) == []
+        and ax.get_xlabel() == ""
+        and ax.get_ylabel() == ""
+        and not ax.lines
+        and len(ax.texts) == 1
+    )
+
+
+def test_statement_panel_is_a_short_strip_without_a_value_scale() -> None:
+    """A not-applicable panel must not look like an empty data plot."""
+    result = _two_epoch_coordinate_linear_result()
+
+    figure = result.plot_evidence_strength(
+        diagnostic_epoch_ratio_policies={("A", "E1"): ("representative_coordinate",)},
+        diagnostic_epoch_coordinates={"E1": 1.0},
+    )
+    try:
+        strength_ax, diagnostic_ax = figure.axes
+        assert strength_ax.get_title() == "Evidence Strength Not Applicable"
+        assert _is_statement_panel(strength_ax)
+        assert not _is_statement_panel(diagnostic_ax)
+        assert diagnostic_ax.get_ylabel() == "Ratio"
+        assert diagnostic_ax.get_xlabel() == "Tested entity / authoritative epoch"
+        figure.canvas.draw()
+        assert (
+            strength_ax.get_position().height
+            < 0.5 * diagnostic_ax.get_position().height
+        )
+    finally:
+        plt.close(figure)
+
+
+def test_unrequested_diagnostics_panel_is_a_statement_under_plotted_strength() -> None:
+    result = TemporalAttributionCalibration([_evidence("a-source", 0.8)]).apply_estimates(
+        {"E1": {"A": 100.0, "B": 100.0}},
+        ratio_policy="explicit_strength",
+        epoch_ratio_policy="direct",
+        residual_policy="allow_total_change",
+        source_evidence={"A": "a-source"},
+        evidence_strength={("A", "E1"): 0.5},
+    )
+
+    figure = result.plot_evidence_strength()
+    try:
+        strength_ax, diagnostic_ax = figure.axes
+        assert _is_statement_panel(diagnostic_ax)
+        assert not _is_statement_panel(strength_ax)
+        assert strength_ax.get_ylabel() == "Strength or ratio"
+        assert strength_ax.get_xlabel() == "Tested entity / authoritative epoch"
+        figure.canvas.draw()
+        assert (
+            diagnostic_ax.get_position().height
+            < 0.5 * strength_ax.get_position().height
+        )
+    finally:
+        plt.close(figure)
+
+
+def test_two_statement_panels_share_the_figure_equally() -> None:
+    result = TemporalAttributionCalibration([_evidence("a-test", 0.8)]).apply_estimates(
+        {"E1": {"A": 100.0, "B": 100.0}},
+        ratio_policy="explicit_ratio",
+        epoch_ratio_policy="direct",
+        residual_policy="allow_total_change",
+        ratio_schedule={("A", "E1"): 0.8},
+    )
+
+    figure = result.plot_evidence_strength()
+    try:
+        strength_ax, diagnostic_ax = figure.axes
+        assert _is_statement_panel(strength_ax)
+        assert _is_statement_panel(diagnostic_ax)
+        figure.canvas.draw()
+        assert strength_ax.get_position().height == pytest.approx(
+            diagnostic_ax.get_position().height
+        )
+    finally:
+        plt.close(figure)
