@@ -16,6 +16,7 @@ NOTEBOOKS = (
     "side_by_side.ipynb",
     "temporal_markov.ipynb",
     "temporal_shapley.ipynb",
+    "weighted_attribution.ipynb",
 )
 
 
@@ -117,6 +118,78 @@ def test_executed_stress_test_keeps_the_legacy_game_refusal_visible() -> None:
     assert "negative_share" in stress_output
 
 
+def test_weighted_notebook_calls_fit_with_the_optional_weights() -> None:
+    source = _all_source("weighted_attribution.ipynb")
+
+    # The unweighted call is shown unchanged, beside the weighted ones.
+    assert "unweighted_model.fit(paths, conversions)" in source
+    assert 'weights=frequency_table["journeys"]' in source
+    assert "weights=relative_frequency" in source
+    assert "weights=zero_weights" in source
+    assert "comparison.fit(paths, conversions, weights=weights)" in source
+    assert "CompareAttribution(include_baselines=True).fit(" in source
+    assert "rtol=1e-10" in source and "atol=1e-12" in source
+
+
+def test_executed_weighted_notebook_shows_the_weighting_contracts() -> None:
+    output = _all_text_outputs("weighted_attribution.ipynb")
+
+    # 1. A fit without weights reports its counts as the weight totals.
+    assert "False      272792.0                4848.0" in output
+
+    # 2. Frequency weights reproduce the one-row-per-journey fit.
+    assert "272,792 journey rows -> 1,546 distinct (path, conversion) rows" in output
+    for quantity in ("shares         ", "raw values     ", "coalition table"):
+        assert f"weighted table reproduces the row-level {quantity}: True" in output
+    assert "True      272792.0                4848.0" in output
+    # Observed rows and weighted totals are reported separately.
+    assert "Overall: 1546 paths, 276 conversions, 17.85% conversion rate" in output
+    assert "| Total observation weight      | 272792 |" in output
+    assert "| Weighted conversions          | 4848   |" in output
+    assert "Top coalitions by weighted conversions" in output
+
+    # 3. Fractional weights are kept; zero weights remove journeys.
+    assert "shares unchanged by rescaling the weights: True" in output
+    assert "weighted conversions 0.017772; observed conversion rate 0.017772" in output
+    assert "journeys touching Affiliate (weight 0): 1,037" in output
+    assert (
+        "channels with zero weight: Direct, Email, Organic Search, "
+        "Organic Social, Other, Paid Search, Referral"
+    ) in output
+    assert "same shares as deleting those rows: True" in output
+    assert "Overall: 272792 paths, 4848 conversions, 1.78% conversion rate" in output
+    assert "| Zero-weight journeys excluded | 1037   |" in output
+
+    # 4. The weighted comparison recovers the fit on all journeys.
+    assert "rows kept           : 129,749 of 272,792" in output
+    assert "sample, weighted    0.0002      0.0" in output
+    assert "sample, no weights  0.0369      0.0" in output
+    assert "all journeys      : Markov P(conversion | start) = 0.0178" in output
+    assert "sample, weighted  : Markov P(conversion | start) = 0.0177" in output
+    assert "sample, no weights: Markov P(conversion | start) = 0.0374" in output
+    assert (
+        "ValueError: A weighted comparison supports only the built-in Markov "
+        "and Shapley models."
+    ) in output
+
+
+def test_weighted_notebook_text_quotes_the_numbers_its_outputs_show() -> None:
+    """The prose restates results; they must be the executed ones."""
+    notebook = _notebook("weighted_attribution.ipynb")
+    prose = "\n".join(
+        _source(cell) for cell in notebook["cells"] if cell["cell_type"] == "markdown"
+    )
+    normalized = " ".join(prose.split())
+
+    assert "the 1,546 rows of the frequency table, 276 of them with" in normalized
+    assert "the 272,792 journeys and 4,848 conversions" in normalized
+    assert "Markov shares within 0.0002 of the fit on all journeys" in normalized
+    assert "a conversion probability of 0.0177 against 0.0178" in normalized
+    assert "roughly doubles to 0.0374" in normalized
+    assert "up to 3.7 percentage points" in normalized
+    assert "still counts all 272,792 rows" in normalized
+
+
 def test_temporal_notebooks_assign_every_journey_to_one_weekly_epoch() -> None:
     """A week spanning 2020/2021 is one epoch holding all of its journeys."""
     for notebook_name in ("temporal_markov.ipynb", "temporal_shapley.ipynb"):
@@ -142,6 +215,7 @@ def test_every_figure_is_displayed_exactly_once() -> None:
         "side_by_side.ipynb": 1,
         "temporal_markov.ipynb": 2,
         "temporal_shapley.ipynb": 2,
+        "weighted_attribution.ipynb": 0,
     }
     assert set(expected_image_counts) == set(NOTEBOOKS)
     for notebook_name, expected in expected_image_counts.items():

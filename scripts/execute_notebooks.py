@@ -36,6 +36,7 @@ NOTEBOOKS = (
     "side_by_side.ipynb",
     "temporal_markov.ipynb",
     "temporal_shapley.ipynb",
+    "weighted_attribution.ipynb",
 )
 # Figures are rendered through the same backend a Jupyter kernel selects on
 # its own, so ``plt.show()`` embeds the image in the notebook.  It needs no

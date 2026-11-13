@@ -67,6 +67,13 @@ chronological epochs.
   the raw values admit a valid share vector, and reported as unavailable
   when they do not. The legacy exact-set game remains available through
   `characteristic_function="exact"`.
+- **Optional observation weights.** `ShapleyAttribution.fit` and
+  `CompareAttribution.fit` accept per-journey `weights=` — frequency counts,
+  sampling weights, or any other nonnegative weight — under the same rules
+  as `MarkovAttribution.fit`. Weighted coalition totals are kept as
+  fractions, zero-weight journeys are excluded, and a weighted comparison
+  fits Markov and Shapley on the same weighted journeys. A fit without
+  weights is unchanged.
 - **Conservation and contract guarantees.** When normalized attribution is
   available its shares are finite, lie on `[0, 1]`, and sum to 1, and
   attributed conversions conserve the observed total. When it is not,
@@ -575,6 +582,10 @@ sum to the weighted conversions of every nonempty coalition, and under
 `"exact"` to `v_w(N)`. When no positively weighted journey converts,
 `attribution` is `None` with `normalization_reason="zero_raw_magnitude"`.
 
+[`examples/weighted_attribution.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/main/examples/weighted_attribution.ipynb)
+works through frequency weights, fractional and zero weights, and a weighted
+comparison on the GA4 journey extract.
+
 ### Side-by-side comparison
 
 ```python
@@ -757,7 +768,9 @@ conversion count. In `summary()`, the journey count, conversion count, and
 conversion rate stay plain counts of the rows passed to `fit`; a weighted
 fit adds an `Observation weights` section with the weighted totals, and its
 coalition tables show weighted conversions without rounding them to
-integers.
+integers. `Path diagnostics` likewise counts rows rather than weights, over
+the rows with positive weight. With frequency weights these row counts
+describe the rows of the frequency table, not the journeys they stand for.
 
 ```python
 tables = model.to_dataframes()      # `model` is the quick-start MarkovAttribution
@@ -772,7 +785,7 @@ for name, table in tables.items():
 
 ## Detailed examples
 
-All six notebooks run end to end on the same GA4 journey extract
+All seven notebooks run end to end on the same GA4 journey extract
 ([`examples/ga4_attribution_journeys.csv`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/ga4_attribution_journeys.csv))
 — a transformed journey-level
 extract created from
@@ -785,6 +798,7 @@ path, a binary conversion flag, and an anchor timestamp.
 | [`examples/basic_markov.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/basic_markov.ipynb) | static Markov fit, shares, removal effects, summary, transition graph |
 | [`examples/basic_shapley.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/basic_shapley.ipynb) | Shapley shares, raw values, coalition results, coalition plot |
 | [`examples/side_by_side.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/side_by_side.ipynb) | `CompareAttribution` aligned tables, differences, comparison plot |
+| [`examples/weighted_attribution.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/main/examples/weighted_attribution.ipynb) | optional `weights=`: frequency weights that reproduce the one-row-per-journey Shapley fit, fractional and zero weights, the weighted summary and export, and a weighted `CompareAttribution` on a down-sampled journey table |
 | [`examples/temporal_markov.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/temporal_markov.ipynb) | weekly Markov epochs, diagnostics, `to_dataframes()`, epoch recommendation |
 | [`examples/temporal_shapley.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/temporal_shapley.ipynb) | weekly Shapley epochs, channel trends, diagnostics, epoch recommendation |
 | [`examples/attribution_experiment_calibration.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/attribution_experiment_calibration.ipynb) | seeded semi-synthetic randomized campaign on the GA4 rows, matched static and temporal Markov estimates, calibration, the experimental-evidence figure, and seven calibration diagnostics |

@@ -165,14 +165,15 @@ def _weighted_total(value: object) -> str:
 def _signed_weighted(value: object) -> str:
     """Render a signed raw value from a weighted fit.
 
-    Uses the standard four-decimal rendering unless that would print a
-    nonzero value as zero, in which case six significant digits are shown.
+    Uses the standard four-decimal rendering wherever it keeps at least
+    three significant digits.  A nonzero value below ``0.01`` in magnitude,
+    as weights that sum to 1 routinely produce, would keep fewer or print as
+    zero, so it is shown to six significant digits instead.
     """
     number = float(value)
-    text = _signed(number)
-    if number != 0.0 and float(text) == 0.0:
+    if number != 0.0 and abs(number) < 0.01:
         return f"{number:+.6g}"
-    return text
+    return _signed(number)
 
 
 def build_observation_weight_section(

@@ -1067,6 +1067,28 @@ def test_weighted_summary_never_shows_a_small_nonzero_value_as_zero(
     assert "| A         | 2e-06                |" in table
 
 
+def test_weighted_summary_keeps_significant_digits_of_small_raw_values():
+    """Weights that sum to 1 give raw values far below 1."""
+    small_model, small = _fit(
+        "cumulative", ["A", "B"], [1, 1], [0.00765381, 0.0000705739]
+    )
+    assert small["shapley_values"] == {"A": 0.00765381, "B": 0.0000705739}
+    table = small_model.summary()
+    # Four decimals would print these as +0.0077 and +0.0001.
+    assert "| A       | +0.00765381  |" in table
+    assert "| B       | +7.05739e-05 |" in table
+
+    # A value with three or more significant digits at four decimals keeps
+    # the standard rendering.
+    larger_model, larger = _fit(
+        "cumulative", ["A", "B", "A > B"], [1, 1, 1], [0.0004, 0.00007, 0.9]
+    )
+    _assert_mapping_close(larger["shapley_values"], {"A": 0.4504, "B": 0.45007})
+    table = larger_model.summary()
+    assert "| A       | +0.4504 |" in table
+    assert "| B       | +0.4501 |" in table
+
+
 def test_unweighted_summary_is_unchanged_by_the_weight_option():
     model, _ = _fit(
         "cumulative", WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, WEIGHTED_WEIGHTS
