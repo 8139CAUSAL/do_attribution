@@ -37,12 +37,14 @@ from examples.calibration_workflow import (
     fit_static_attribution_and_calibration,
     fit_temporal_attribution_and_calibration,
     load_ga4_journeys,
+    plot_experimental_evidence,
     run_calibration_workflow,
 )
 
 
 DEFAULT_OUTPUT_DIR = REPOSITORY_ROOT / "examples" / "images"
 ARTIFACT_FILENAMES = (
+    "calibration_experimental_evidence.png",
     "calibration_static_effects.png",
     "calibration_temporal_epoch_alignment.png",
     "calibration_temporal_ratio_schedule.png",
@@ -50,7 +52,6 @@ ARTIFACT_FILENAMES = (
     "calibration_temporal_effects.png",
     "calibration_temporal_residual_allocation.png",
     "calibration_temporal_entity_mix.png",
-    "calibration_temporal_evidence_strength.png",
 )
 
 
@@ -76,17 +77,6 @@ def build_temporal_result() -> TemporalCalibrationResult:
         experiment_data,
         experimental_estimates=experimental_estimates,
     ).calibration_result
-
-
-def build_strength_result() -> TemporalCalibrationResult:
-    """Backward-compatible alias for the shared temporal result.
-
-    The applied policy is coordinate-linear, so its evidence-strength
-    diagnostic correctly states that an explicit strength schedule is not
-    applicable.  A separate toy result is intentionally not constructed.
-    """
-
-    return build_temporal_result()
 
 
 def _label_experimental_layer(figure: Any) -> Any:
@@ -122,17 +112,26 @@ def _save_figure(figure: Any, destination: Path) -> None:
 def generate_calibration_visuals(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
 ) -> tuple[Path, ...]:
-    """Generate all eight public calibration PNG artifacts."""
+    """Generate all eight public calibration PNG artifacts.
+
+    The first is the example's own experimental-evidence figure; the other
+    seven are drawn by the package's public plot methods.
+    ``plot_evidence_strength()`` is not rendered: for this coordinate-linear
+    result it has no strength schedule to show, and the only alternative it
+    could compare is one interpolated ratio against a near-identical one.
+    """
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
     workflow = run_calibration_workflow()
     static_result = workflow.static.calibration_result
     temporal_result = workflow.temporal.calibration_result
-    tested_entity = workflow.temporal.evidence[0].tested_entity
-    middle_epoch = temporal_result.epochs[len(temporal_result.epochs) // 2]
 
     figures = (
+        plot_experimental_evidence(
+            workflow.temporal,
+            workflow.experimental_estimates,
+        ),
         static_result.plot_calibration_effects(),
         temporal_result.plot_epoch_alignment(),
         temporal_result.plot_ratio_schedule(),
@@ -140,11 +139,6 @@ def generate_calibration_visuals(
         temporal_result.plot_calibration_effects(),
         temporal_result.plot_residual_allocation(),
         temporal_result.plot_entity_mix(),
-        temporal_result.plot_evidence_strength(
-            diagnostic_epoch_ratio_policies={
-                (tested_entity, middle_epoch): ("coordinate_average",)
-            },
-        ),
     )
     figures = tuple(_label_experimental_layer(figure) for figure in figures)
     paths = tuple(destination / name for name in ARTIFACT_FILENAMES)

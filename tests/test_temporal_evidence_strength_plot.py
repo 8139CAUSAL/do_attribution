@@ -1,4 +1,10 @@
-"""Evidence-strength and nonapplied diagnostic plotting tests for CAL-078."""
+"""Evidence-strength and nonapplied diagnostic plotting tests for CAL-078.
+
+``plot_evidence_strength()`` is a calibration-policy comparison.  A strength
+schedule exists only under ``explicit_strength`` and nonapplied alternatives
+can be requested only under ``observed_only`` or ``coordinate_linear``, so the
+figure is one axes holding the view that applies to the result.
+"""
 
 import pytest
 
@@ -67,8 +73,9 @@ def test_explicit_strength_pairs_strength_source_and_effective_ratios() -> None:
     figure = result.plot_evidence_strength()
     try:
         assert isinstance(figure, Figure)
-        assert len(figure.axes) == 2
-        strength_ax, diagnostic_ax = figure.axes
+        # The strength schedule is the whole figure: nonapplied alternatives
+        # cannot be requested for this policy, so no panel is kept for them.
+        (strength_ax,) = figure.axes
         assert strength_ax.get_title() == "Explicit Evidence Strength Schedule"
         values = _container_values(strength_ax)
         assert values["Explicit evidence strength"] == [0.0, 0.5, 1.0]
@@ -79,10 +86,10 @@ def test_explicit_strength_pairs_strength_source_and_effective_ratios() -> None:
             "A / E2",
             "A / E3",
         ]
-        assert [text.get_text() for text in diagnostic_ax.texts] == [
-            "No diagnostic alternatives were requested; stored applied "
-            "policies and ratios are unchanged."
-        ]
+        assert strength_ax.get_ylabel() == "Strength or ratio"
+        assert strength_ax.get_xlabel() == "Tested entity / authoritative epoch"
+        assert not strength_ax.texts
+        assert not strength_ax.collections
         assert (
             result.rows,
             result.epoch_ratio_schedule,
@@ -92,7 +99,8 @@ def test_explicit_strength_pairs_strength_source_and_effective_ratios() -> None:
         plt.close(figure)
 
 
-def test_non_strength_result_returns_explicit_nonapplicable_panel() -> None:
+def test_result_with_no_applicable_view_states_so_without_a_value_scale() -> None:
+    """Neither view applies, so the figure says that and plots nothing."""
     result = TemporalAttributionCalibration([_evidence("a-test", 0.8)]).apply_estimates(
         {"E1": {"A": 100.0, "B": 100.0}},
         ratio_policy="explicit_ratio",
@@ -103,13 +111,22 @@ def test_non_strength_result_returns_explicit_nonapplicable_panel() -> None:
 
     figure = result.plot_evidence_strength()
     try:
-        strength_ax = figure.axes[0]
-        assert strength_ax.get_title() == "Evidence Strength Not Applicable"
-        assert [text.get_text() for text in strength_ax.texts] == [
+        (ax,) = figure.axes
+        assert ax.get_title() == "Evidence Strength Not Applicable"
+        assert [text.get_text() for text in ax.texts] == [
             "Evidence strength is not applicable to the applied ratio policy: "
-            "explicit_ratio."
+            "explicit_ratio.",
+            "No diagnostic alternatives were requested; stored applied "
+            "policies and ratios are unchanged.",
         ]
-        assert not strength_ax.containers
+        assert not ax.containers
+        assert not ax.collections
+        # A statement is not an empty data plot: no scale, label or line.
+        assert list(ax.get_xticks()) == []
+        assert list(ax.get_yticks()) == []
+        assert ax.get_xlabel() == ""
+        assert ax.get_ylabel() == ""
+        assert not ax.lines
     finally:
         plt.close(figure)
 
@@ -147,7 +164,7 @@ def test_selected_weighted_and_pooled_diagnostics_are_labeled_nonapplied() -> No
         },
     )
     try:
-        diagnostic_ax = figure.axes[1]
+        (diagnostic_ax,) = figure.axes
         values = _collection_values(diagnostic_ax)
         assert values["Stored applied effective ratio"] == [0.6]
         assert values[
@@ -195,7 +212,8 @@ def test_representative_and_coordinate_average_diagnostics_are_nonapplied() -> N
         diagnostic_epoch_coordinates={"E1": 2.5},
     )
     try:
-        values = _collection_values(figure.axes[1])
+        (diagnostic_ax,) = figure.axes
+        values = _collection_values(diagnostic_ax)
         assert values["Stored applied effective ratio"] == pytest.approx([1.1])
         assert values[
             "Diagnostic only — not applied: representative_coordinate"
@@ -267,7 +285,7 @@ def test_one_requested_pair_keeps_its_markers_beside_its_tick() -> None:
         diagnostic_epoch_coordinates={"E1": 1.0},
     )
     try:
-        diagnostic_ax = figure.axes[1]
+        (diagnostic_ax,) = figure.axes
         assert diagnostic_ax.get_xlim() == (-0.5, 0.5)
         assert list(diagnostic_ax.get_xticks()) == [0]
         assert [tick.get_text() for tick in diagnostic_ax.get_xticklabels()] == [
@@ -292,7 +310,7 @@ def test_each_requested_pair_has_its_own_band() -> None:
         diagnostic_epoch_coordinates={"E1": 1.0, "E2": 9.0},
     )
     try:
-        diagnostic_ax = figure.axes[1]
+        (diagnostic_ax,) = figure.axes
         assert diagnostic_ax.get_xlim() == (-0.5, 1.5)
         assert [tick.get_text() for tick in diagnostic_ax.get_xticklabels()] == [
             "A / E1",
@@ -312,20 +330,8 @@ def test_each_requested_pair_has_its_own_band() -> None:
         plt.close(figure)
 
 
-def _is_statement_panel(ax) -> bool:
-    """A panel that states a fact carries no scale, axis label or data line."""
-    return (
-        list(ax.get_xticks()) == []
-        and list(ax.get_yticks()) == []
-        and ax.get_xlabel() == ""
-        and ax.get_ylabel() == ""
-        and not ax.lines
-        and len(ax.texts) == 1
-    )
-
-
-def test_statement_panel_is_a_short_strip_without_a_value_scale() -> None:
-    """A not-applicable panel must not look like an empty data plot."""
+def test_requested_alternatives_are_the_whole_figure_for_a_non_strength_result() -> None:
+    """No empty evidence-strength panel accompanies the ratio comparison."""
     result = _two_epoch_coordinate_linear_result()
 
     figure = result.plot_evidence_strength(
@@ -333,64 +339,22 @@ def test_statement_panel_is_a_short_strip_without_a_value_scale() -> None:
         diagnostic_epoch_coordinates={"E1": 1.0},
     )
     try:
-        strength_ax, diagnostic_ax = figure.axes
-        assert strength_ax.get_title() == "Evidence Strength Not Applicable"
-        assert _is_statement_panel(strength_ax)
-        assert not _is_statement_panel(diagnostic_ax)
+        (diagnostic_ax,) = figure.axes
+        assert diagnostic_ax.get_title() == (
+            "Applied Ratios and Explicitly Requested Diagnostic Alternatives"
+        )
         assert diagnostic_ax.get_ylabel() == "Ratio"
         assert diagnostic_ax.get_xlabel() == "Tested entity / authoritative epoch"
-        figure.canvas.draw()
-        assert (
-            strength_ax.get_position().height
-            < 0.5 * diagnostic_ax.get_position().height
-        )
-    finally:
-        plt.close(figure)
-
-
-def test_unrequested_diagnostics_panel_is_a_statement_under_plotted_strength() -> None:
-    result = TemporalAttributionCalibration([_evidence("a-source", 0.8)]).apply_estimates(
-        {"E1": {"A": 100.0, "B": 100.0}},
-        ratio_policy="explicit_strength",
-        epoch_ratio_policy="direct",
-        residual_policy="allow_total_change",
-        source_evidence={"A": "a-source"},
-        evidence_strength={("A", "E1"): 0.5},
-    )
-
-    figure = result.plot_evidence_strength()
-    try:
-        strength_ax, diagnostic_ax = figure.axes
-        assert _is_statement_panel(diagnostic_ax)
-        assert not _is_statement_panel(strength_ax)
-        assert strength_ax.get_ylabel() == "Strength or ratio"
-        assert strength_ax.get_xlabel() == "Tested entity / authoritative epoch"
-        figure.canvas.draw()
-        assert (
-            diagnostic_ax.get_position().height
-            < 0.5 * strength_ax.get_position().height
-        )
-    finally:
-        plt.close(figure)
-
-
-def test_two_statement_panels_share_the_figure_equally() -> None:
-    result = TemporalAttributionCalibration([_evidence("a-test", 0.8)]).apply_estimates(
-        {"E1": {"A": 100.0, "B": 100.0}},
-        ratio_policy="explicit_ratio",
-        epoch_ratio_policy="direct",
-        residual_policy="allow_total_change",
-        ratio_schedule={("A", "E1"): 0.8},
-    )
-
-    figure = result.plot_evidence_strength()
-    try:
-        strength_ax, diagnostic_ax = figure.axes
-        assert _is_statement_panel(strength_ax)
-        assert _is_statement_panel(diagnostic_ax)
-        figure.canvas.draw()
-        assert strength_ax.get_position().height == pytest.approx(
-            diagnostic_ax.get_position().height
-        )
+        # Nothing in the figure presents the comparison as evidence strength.
+        assert not diagnostic_ax.texts
+        assert not diagnostic_ax.containers
+        assert "strength" not in diagnostic_ax.get_title().lower()
+        legend_labels = [
+            text.get_text() for text in diagnostic_ax.get_legend().get_texts()
+        ]
+        assert legend_labels == [
+            "Stored applied effective ratio",
+            "Diagnostic only — not applied: representative_coordinate",
+        ]
     finally:
         plt.close(figure)

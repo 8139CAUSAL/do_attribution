@@ -24,6 +24,7 @@ GENERATOR_PATH = ROOT / "examples" / "generate_calibration_visuals.py"
 IMAGE_DIR = ROOT / "examples" / "images"
 DIAGNOSTICS = ROOT / "docs" / "calibration_diagnostics.md"
 EXPECTED_FILENAMES = (
+    "calibration_experimental_evidence.png",
     "calibration_static_effects.png",
     "calibration_temporal_epoch_alignment.png",
     "calibration_temporal_ratio_schedule.png",
@@ -31,7 +32,6 @@ EXPECTED_FILENAMES = (
     "calibration_temporal_effects.png",
     "calibration_temporal_residual_allocation.png",
     "calibration_temporal_entity_mix.png",
-    "calibration_temporal_evidence_strength.png",
 )
 
 
@@ -62,12 +62,26 @@ def test_checked_in_artifact_bank_has_exact_readable_png_inventory() -> None:
             assert image.height >= 450
 
 
-def test_generator_calls_all_eight_public_plot_methods(
+def test_generator_renders_the_evidence_figure_and_seven_public_plot_methods(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """The bank leads with the experimental evidence, then the package plots.
+
+    ``plot_evidence_strength()`` is deliberately absent: the coordinate-linear
+    example has no strength schedule, and its only requestable alternative is
+    one interpolated ratio beside a near-identical one.
+    """
     generator = _generator_module()
     calls: list[str] = []
+
+    evidence_figure = generator.plot_experimental_evidence
+
+    def evidence_wrapper(*args, **kwargs):
+        calls.append("plot_experimental_evidence")
+        return evidence_figure(*args, **kwargs)
+
+    monkeypatch.setattr(generator, "plot_experimental_evidence", evidence_wrapper)
 
     static_method = CalibrationResult.plot_calibration_effects
     temporal_methods = {
@@ -81,6 +95,11 @@ def test_generator_calls_all_eight_public_plot_methods(
             "plot_entity_mix",
             "plot_evidence_strength",
         )
+    }
+    assert set(temporal_methods) == {
+        name
+        for name in dir(TemporalCalibrationResult)
+        if name.startswith("plot_")
     }
 
     def static_wrapper(self):
@@ -103,6 +122,7 @@ def test_generator_calls_all_eight_public_plot_methods(
     generated = generator.generate_calibration_visuals(tmp_path)
     assert tuple(path.name for path in generated) == EXPECTED_FILENAMES
     assert calls == [
+        "plot_experimental_evidence",
         "CalibrationResult.plot_calibration_effects",
         "TemporalCalibrationResult.plot_epoch_alignment",
         "TemporalCalibrationResult.plot_ratio_schedule",
@@ -110,7 +130,6 @@ def test_generator_calls_all_eight_public_plot_methods(
         "TemporalCalibrationResult.plot_calibration_effects",
         "TemporalCalibrationResult.plot_residual_allocation",
         "TemporalCalibrationResult.plot_entity_mix",
-        "TemporalCalibrationResult.plot_evidence_strength",
     ]
     assert plt.get_fignums() == []
 

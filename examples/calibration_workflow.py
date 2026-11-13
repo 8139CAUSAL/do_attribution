@@ -806,6 +806,335 @@ def calibration_comparison_table(
     return pd.DataFrame.from_records(rows)
 
 
+def plot_experimental_evidence(
+    temporal: TemporalCalibrationWorkflow,
+    experimental_estimates: pd.DataFrame,
+    *,
+    config: ExperimentConfig = DEFAULT_EXPERIMENT_CONFIG,
+) -> Any:
+    """Plot the randomized evidence and its translation into calibration.
+
+    The three panels follow the chain this workflow computes:
+
+    A. the randomized outcomes of each test window: conversion rate,
+       conversions, and journeys of the campaign-assigned and holdout arms;
+    B. the estimated incremental lift with its 95% confidence interval,
+       beside the matched attribution estimate it is compared with;
+    C. the calibration ratio of each authoritative epoch, separating ratios
+       observed in an experiment from ratios the applied policy constructed.
+
+    The interval in panel B is the experiment's own: lift plus or minus 1.96
+    standard errors.  Calibration does not propagate the standard error, so
+    panel C draws no interval on any ratio and the figure shows no interval
+    for a calibrated estimate.
+    """
+
+    import matplotlib.pyplot as plt  # plotting is optional for the workflow
+    from matplotlib.lines import Line2D
+    from matplotlib.ticker import PercentFormatter
+
+    experiment_color = "#1f77b4"
+    holdout_color = "#8ab8e0"
+    constructed_color = "#959ca8"
+    interval_color = "#0d3d66"
+    edge = {"edgecolor": "black", "linewidth": 0.4}
+
+    estimate_by_id = {
+        row["evidence_id"]: row
+        for row in experimental_estimates.to_dict(orient="records")
+    }
+    evidence_by_id = {record.test_id: record for record in temporal.evidence}
+    windows = config.windows
+    missing = [
+        window.test_id
+        for window in windows
+        if window.test_id not in estimate_by_id
+        or window.test_id not in evidence_by_id
+    ]
+    if missing:
+        raise ValueError(
+            "Every experiment window needs one experimental estimate and one "
+            f"evidence record; missing={missing!r}."
+        )
+    estimates = [estimate_by_id[window.test_id] for window in windows]
+    evidence = [evidence_by_id[window.test_id] for window in windows]
+
+    result = temporal.calibration_result
+    ratio_rows = {
+        row.epoch: row
+        for row in result.epoch_ratio_schedule
+        if row.tested_entity == config.tested_entity
+    }
+    ratio_epochs = [epoch for epoch in result.epochs if epoch in ratio_rows]
+    evidence_by_coordinate = {
+        record.coordinate_value: record for record in temporal.evidence
+    }
+
+    figure = plt.figure(figsize=(12, 9.5))
+    grid = figure.add_gridspec(2, 2, height_ratios=(1.0, 1.15))
+    outcomes_ax = figure.add_subplot(grid[0, 0])
+    lift_ax = figure.add_subplot(grid[0, 1])
+    ratio_ax = figure.add_subplot(grid[1, :])
+    figure.suptitle(
+        "Experimental Lift Evidence and Its Translation into "
+        "Attribution Calibration",
+        fontsize=14,
+    )
+
+    bar_height = 0.34
+    offset = 0.2
+    centers = [float(index) for index in range(len(windows))]
+    upper = [center - offset for center in centers]
+    lower = [center + offset for center in centers]
+    # Panels A and B keep an empty band under the last window for their
+    # legends, so a legend never sits on a bar or on a value label.
+    legend_band = 0.95
+    bar_axis_limits = (len(windows) - 0.5 + legend_band, -0.5)
+
+    # A. Randomized outcomes -------------------------------------------------
+    treatment_rates = [row["treatment_conversion_rate"] for row in estimates]
+    control_rates = [row["control_conversion_rate"] for row in estimates]
+    outcomes_ax.barh(
+        upper,
+        treatment_rates,
+        height=bar_height,
+        color=experiment_color,
+        label="Treatment: campaign-assigned journeys",
+        **edge,
+    )
+    outcomes_ax.barh(
+        lower,
+        control_rates,
+        height=bar_height,
+        color=holdout_color,
+        label="Control: holdout journeys",
+        **edge,
+    )
+    for positions, rates, prefix in (
+        (upper, treatment_rates, "treatment"),
+        (lower, control_rates, "control"),
+    ):
+        for position, rate, row in zip(positions, rates, estimates):
+            outcomes_ax.annotate(
+                f"{rate:.2%}  ({row[f'{prefix}_conversions']:,} of "
+                f"{row[f'{prefix}_journeys']:,})",
+                (rate, position),
+                xytext=(5, 0),
+                textcoords="offset points",
+                va="center",
+                fontsize=9,
+            )
+    outcomes_ax.set_yticks(centers)
+    outcomes_ax.set_yticklabels(
+        [
+            f"{window.name}\n{row['eligible_journeys']:,} eligible journeys"
+            for window, row in zip(windows, estimates)
+        ]
+    )
+    outcomes_ax.set_ylim(*bar_axis_limits)
+    outcomes_ax.set_xlim(0.0, 1.9 * max(treatment_rates + control_rates))
+    outcomes_ax.xaxis.set_major_formatter(PercentFormatter(xmax=1.0, decimals=1))
+    outcomes_ax.set_xlabel("Conversion rate")
+    outcomes_ax.set_title("A. Experimental outcomes by test window")
+    outcomes_ax.grid(axis="x", alpha=0.2)
+    outcomes_ax.set_axisbelow(True)
+    outcomes_ax.legend(loc="lower center", fontsize=9)
+
+    # B. Estimated lift beside the matched attribution estimate ---------------
+    lifts = [record.observed_lift for record in evidence]
+    half_widths = [1.96 * record.standard_error for record in evidence]
+    matched = [record.matched_mta_estimate for record in evidence]
+    lift_ax.barh(
+        upper,
+        lifts,
+        height=bar_height,
+        color=experiment_color,
+        label="Experimental lift (incremental conversions)",
+        **edge,
+    )
+    lift_ax.errorbar(
+        lifts,
+        upper,
+        xerr=half_widths,
+        fmt="none",
+        ecolor=interval_color,
+        elinewidth=2.0,
+        capsize=6,
+        capthick=2.0,
+        label="95% confidence interval of the lift (± 1.96 SE)",
+    )
+    lift_ax.barh(
+        lower,
+        matched,
+        height=bar_height,
+        color=constructed_color,
+        label="Matched MTA estimate (attributed conversions)",
+        **edge,
+    )
+    for position, lift, half_width in zip(upper, lifts, half_widths):
+        lift_ax.annotate(
+            f"{lift:,.1f}  (95% CI {lift - half_width:,.1f}"
+            f"\N{EN DASH}{lift + half_width:,.1f})",
+            (lift + half_width, position),
+            xytext=(7, 0),
+            textcoords="offset points",
+            va="center",
+            fontsize=9,
+        )
+    for position, value in zip(lower, matched):
+        lift_ax.annotate(
+            f"{value:,.1f}",
+            (value, position),
+            xytext=(5, 0),
+            textcoords="offset points",
+            va="center",
+            fontsize=9,
+        )
+    lift_ax.set_yticks(centers)
+    lift_ax.set_yticklabels([window.name for window in windows])
+    lift_ax.set_ylim(*bar_axis_limits)
+    lift_ax.set_xlim(
+        0.0,
+        2.0 * max(lift + half_width for lift, half_width in zip(lifts, half_widths)),
+    )
+    lift_ax.set_xlabel("Incremental or attributed conversions")
+    lift_ax.set_title("B. Experimental lift versus matched MTA estimate")
+    lift_ax.grid(axis="x", alpha=0.2)
+    lift_ax.set_axisbelow(True)
+    lift_ax.legend(loc="lower center", fontsize=9)
+
+    # C. Calibration ratios across time ---------------------------------------
+    positions = [float(index) for index in range(len(ratio_epochs))]
+    ratios = [ratio_rows[epoch].effective_ratio for epoch in ratio_epochs]
+    ratio_ax.axhline(
+        1.0,
+        color="0.45",
+        linewidth=1.0,
+        linestyle="--",
+        zorder=1,
+    )
+    ratio_ax.plot(
+        positions,
+        ratios,
+        color=experiment_color,
+        linewidth=2.0,
+        zorder=2,
+    )
+    constructed_sources: list[str] = []
+    for position, epoch, ratio in zip(positions, ratio_epochs, ratios):
+        row = ratio_rows[epoch]
+        observed = row.ratio_source == "observed"
+        ratio_ax.scatter(
+            [position],
+            [ratio],
+            marker="o" if observed else "D",
+            s=150 if observed else 120,
+            color=experiment_color if observed else constructed_color,
+            edgecolor="black",
+            linewidth=0.6,
+            zorder=3,
+        )
+        record = evidence_by_coordinate.get(row.epoch_coordinate)
+        if observed and record is not None:
+            note = (
+                f"Observed\n{ratio:.3f} = {record.observed_lift:,.1f} / "
+                f"{record.matched_mta_estimate:,.1f}"
+            )
+        elif observed:
+            note = f"Observed\n{ratio:.3f}"
+        else:
+            source = row.ratio_source.replace("_", " ").capitalize()
+            if source not in constructed_sources:
+                constructed_sources.append(source)
+            note = f"{source}\n{ratio:.3f}, no experiment ran in this epoch"
+        ratio_ax.annotate(
+            note,
+            (position, ratio),
+            xytext=(0, 12),
+            textcoords="offset points",
+            ha="center",
+            va="bottom",
+            fontsize=9,
+        )
+    ratio_ax.set_xticks(positions)
+    ratio_ax.set_xticklabels(
+        [
+            epoch.strftime("%b %Y") if hasattr(epoch, "strftime") else str(epoch)
+            for epoch in ratio_epochs
+        ]
+    )
+    ratio_ax.set_xlim(-0.5, len(ratio_epochs) - 0.5)
+    # The band above the highest annotation is kept free for the legend.
+    span = max(ratios + [1.0]) - min(ratios + [1.0])
+    ratio_ax.set_ylim(
+        min(ratios + [1.0]) - 0.12 * span,
+        max(ratios + [1.0]) + 1.0 * span,
+    )
+    ratio_ax.set_xlabel("Authoritative attribution epoch")
+    ratio_ax.set_ylabel("Calibration ratio\n(experimental lift / matched MTA)")
+    ratio_ax.set_title(
+        f"C. Calibration ratios across time: {config.tested_entity}, "
+        f"ratio policy {result.ratio_policy}"
+    )
+    ratio_ax.grid(axis="y", alpha=0.2)
+    ratio_ax.set_axisbelow(True)
+    ratio_handles = [
+        Line2D(
+            [],
+            [],
+            marker="o",
+            linestyle="none",
+            markersize=10,
+            markerfacecolor=experiment_color,
+            markeredgecolor="black",
+            markeredgewidth=0.6,
+            label="Observed: experimental lift / matched MTA of a test window",
+        ),
+        Line2D(
+            [],
+            [],
+            marker="D",
+            linestyle="none",
+            markersize=9,
+            markerfacecolor=constructed_color,
+            markeredgecolor="black",
+            markeredgewidth=0.6,
+            label=(
+                f"{' / '.join(constructed_sources) or 'Constructed'}: built by "
+                "the ratio policy, not measured"
+            ),
+        ),
+        Line2D(
+            [],
+            [],
+            color=experiment_color,
+            linewidth=2.0,
+            label="Effective ratio applied to each epoch",
+        ),
+        Line2D(
+            [],
+            [],
+            color="0.45",
+            linewidth=1.0,
+            linestyle="--",
+            label="1.0: experimental lift equals the matched MTA estimate",
+        ),
+    ]
+    ratio_ax.legend(
+        handles=ratio_handles,
+        loc="upper center",
+        ncol=2,
+        fontsize=9,
+        title=(
+            "Ratios carry no interval: calibration does not propagate the "
+            "experiment's standard error into ratios or calibrated estimates."
+        ),
+        title_fontsize=9,
+    )
+    figure.tight_layout()
+    return figure
+
+
 def run_calibration_workflow(
     *,
     path: str | Path = DEFAULT_GA4_PATH,
@@ -861,5 +1190,6 @@ __all__ = [
     "fit_static_attribution_and_calibration",
     "fit_temporal_attribution_and_calibration",
     "load_ga4_journeys",
+    "plot_experimental_evidence",
     "run_calibration_workflow",
 ]

@@ -8602,7 +8602,20 @@ class TemporalCalibrationResult:
         | None = None,
         diagnostic_epoch_coordinates: EpochCoordinatesInput | None = None,
     ) -> Any:
-        """Plot strength schedules and explicitly requested nonapplied ratios.
+        """Plot a calibration-policy comparison for this result.
+
+        This is a policy diagnostic, not a measure of statistical evidence.
+        The figure holds the one view that applies to the result:
+
+        - ``explicit_strength``: the caller-declared strength of each tested
+          entity and epoch, beside the source observed ratio and the applied
+          ratio ``1 + strength * (observed - 1)``.  Strength is an attenuation
+          the caller chose.  It is not an estimate of the experiment's
+          precision or of confidence in the experiment.
+        - ``observed_only`` or ``coordinate_linear`` with ``diagnostic_*``
+          arguments: each stored applied ratio beside the explicitly
+          requested alternatives, which are computed and never applied.
+        - otherwise: a statement that neither view applies.
 
         Diagnostic requests are evaluated from defensive copies of evidence and
         authoritative metadata.  They are displayed beside stored applied
@@ -8643,11 +8656,13 @@ class TemporalCalibrationResult:
 
         import matplotlib.pyplot as plt  # lazy optional dependency
 
-        fig, (strength_ax, diagnostic_ax) = plt.subplots(
-            2,
-            1,
-            figsize=(12, 8),
-        )
+        # The strength schedule and the nonapplied alternatives never apply to
+        # the same result: strength exists only under "explicit_strength", and
+        # alternatives can be requested only under "observed_only" or
+        # "coordinate_linear".  The figure is therefore one axes holding the
+        # view that applies, never a second, empty panel for the other.
+        fig, ax = plt.subplots(figsize=(12, 5))
+        strength_ax = diagnostic_ax = ax
 
         if self.ratio_policy == "explicit_strength":
             schedule_provenance = self.ratio_provenance.get(
@@ -8716,21 +8731,6 @@ class TemporalCalibrationResult:
             strength_ax.set_ylabel("Strength or ratio")
             strength_ax.set_xlabel("Tested entity / authoritative epoch")
             strength_ax.grid(axis="y", alpha=0.2)
-        else:
-            strength_ax.text(
-                0.5,
-                0.5,
-                "Evidence strength is not applicable to the applied "
-                f"ratio policy: {self.ratio_policy}.",
-                transform=strength_ax.transAxes,
-                ha="center",
-                va="center",
-            )
-            strength_ax.set_title("Evidence Strength Not Applicable")
-            # The panel states a fact and plots nothing.  A value scale, axis
-            # labels or a grid would present it as an empty data plot.
-            strength_ax.set_xticks([])
-            strength_ax.set_yticks([])
 
         diagnostic_values: list[
             tuple[tuple[Entity, Epoch], str, float | None]
@@ -9011,31 +9011,36 @@ class TemporalCalibrationResult:
             diagnostic_ax.set_xlabel("Tested entity / authoritative epoch")
             diagnostic_ax.set_ylabel("Ratio")
             diagnostic_ax.grid(axis="y", alpha=0.2)
-        else:
-            diagnostic_ax.text(
-                0.5,
-                0.5,
-                "No diagnostic alternatives were requested; stored applied "
-                "policies and ratios are unchanged.",
-                transform=diagnostic_ax.transAxes,
-                ha="center",
-                va="center",
+            diagnostic_ax.set_title(
+                "Applied Ratios and Explicitly Requested Diagnostic Alternatives"
             )
-            # As above: a statement, not an empty data plot.
-            diagnostic_ax.set_xticks([])
-            diagnostic_ax.set_yticks([])
-        diagnostic_ax.set_title(
-            "Applied Ratios and Explicitly Requested Diagnostic Alternatives"
-        )
-        # A panel that only carries a statement is a short strip; the room
-        # goes to the panel that plots values.  Two panels of the same kind
-        # share the figure equally.
-        strength_ax.get_gridspec().set_height_ratios(
-            [
-                3 if self.ratio_policy == "explicit_strength" else 1,
-                3 if diagnostic_values else 1,
-            ]
-        )
+        elif self.ratio_policy != "explicit_strength":
+            # Neither view applies.  The axes states that and plots nothing:
+            # a value scale, axis labels or a grid would present it as an
+            # empty data plot.
+            for height, statement in (
+                (
+                    0.6,
+                    "Evidence strength is not applicable to the applied "
+                    f"ratio policy: {self.ratio_policy}.",
+                ),
+                (
+                    0.4,
+                    "No diagnostic alternatives were requested; stored applied "
+                    "policies and ratios are unchanged.",
+                ),
+            ):
+                ax.text(
+                    0.5,
+                    height,
+                    statement,
+                    transform=ax.transAxes,
+                    ha="center",
+                    va="center",
+                )
+            ax.set_title("Evidence Strength Not Applicable")
+            ax.set_xticks([])
+            ax.set_yticks([])
         fig.tight_layout()
         return fig
 

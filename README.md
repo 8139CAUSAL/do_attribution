@@ -97,7 +97,7 @@ chronological epochs.
 - **Calibration diagnostics.** One static adjustment-decomposition plot and
   seven temporal diagnostics show evidence alignment, ratio construction,
   experiment-reported evidence uncertainty, direct adjustments, residual
-  allocation, entity mix, and evidence strength.
+  allocation, entity mix, and calibration-policy comparisons.
 - **Reproducible outputs.** Deterministic model fits, deterministic
   renderers, and deterministic tie ordering — identical inputs always
   produce identical reports, tables, and figures.
