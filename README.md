@@ -5,7 +5,7 @@ closed-form Markov, exact Shapley, temporal attribution, and explicit
 calibration from external lift-test evidence.**
 
 ![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)
-![Python: 3.10+](https://img.shields.io/badge/python-3.10%2B-blue.svg)
+![Python: 3.11+](https://img.shields.io/badge/python-3.11%2B-blue.svg)
 
 `do-attribution` has two explicit layers:
 
@@ -131,7 +131,7 @@ pip install "do-attribution[viz]"
 pip install "do-attribution[temporal,viz]"
 ```
 
-Requires Python **3.10 or newer**.
+Requires Python 3.11 or newer, NumPy 2.0.2 or newer, and pandas 3.1.1 or newer.
 
 ---
 
