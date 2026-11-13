@@ -24,6 +24,7 @@ from importlib.metadata import version
 from .base import BaseAttribution
 from .markov import MarkovAttribution
 from .shapley import ShapleyAttribution
+from .baselines import FirstTouchAttribution, LastTouchAttribution
 from .compare import CompareAttribution
 # MODIFIED: export TemporalShapleyAttribution now that the module lives
 # inside the package (previously a workspace-root draft).
@@ -94,6 +95,8 @@ __all__ = [
     "BaseAttribution",
     "MarkovAttribution",
     "ShapleyAttribution",
+    "FirstTouchAttribution",
+    "LastTouchAttribution",
     "CompareAttribution",
     # MODIFIED: temporal classes exported alongside their static siblings.
     "TemporalShapleyAttribution",

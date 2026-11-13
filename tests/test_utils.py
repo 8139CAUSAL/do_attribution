@@ -12,6 +12,8 @@ import pytest
 
 from do_attribution import (
     CompareAttribution,
+    FirstTouchAttribution,
+    LastTouchAttribution,
     MarkovAttribution,
     ShapleyAttribution,
     TemporalMarkovAttribution,
@@ -354,6 +356,14 @@ def _compare_fit(paths, dates, conversions):
     return comparison.attribution_frame()
 
 
+def _compare_with_baselines_fit(paths, dates, conversions):
+    comparison = CompareAttribution(
+        markov_removal_strategy="redirect_to_null", include_baselines=True
+    )
+    comparison.fit(paths, conversions)
+    return comparison.attribution_frame()
+
+
 # Every public entry point that accepts journey outcomes.  Each returns the
 # outputs a caller reads, so a fit can be compared with a reference fit.
 ENTRY_POINTS = {
@@ -368,6 +378,17 @@ ENTRY_POINTS = {
         if key in ("attribution", "shapley_values", "value_function")
     },
     "compare_fit": _compare_fit,
+    "compare_with_baselines_fit": _compare_with_baselines_fit,
+    "first_touch_fit": lambda paths, dates, conversions: {
+        key: value
+        for key, value in FirstTouchAttribution().fit(paths, conversions).items()
+        if key in ("attribution", "credited_conversions")
+    },
+    "last_touch_fit": lambda paths, dates, conversions: {
+        key: value
+        for key, value in LastTouchAttribution().fit(paths, conversions).items()
+        if key in ("attribution", "credited_conversions")
+    },
     "temporal_markov_fit": lambda paths, dates, conversions: (
         _temporal_markov().fit(paths, dates, conversions)["attribution_matrix"]
     ),

@@ -545,10 +545,40 @@ and is listed by `unavailable_models()` with its reason code.
 
 The two methods answer different statistical questions and can disagree
 materially without either being defective — `difference_frame` makes the
-disagreement explicit. `extra_models={...}` plugs any additional
-`BaseAttribution` implementation into the same aligned tables, so
-first-touch, last-touch, or any custom baseline can sit beside the two
-built-in models.
+disagreement explicit.
+
+`include_baselines=True` adds the two built-in single-touch baselines as
+fixed reference points, so that disagreement can be read against the naive
+allocations practitioners actually use. `FirstTouchAttribution` gives each
+converting journey's whole conversion to the first channel it touched,
+`LastTouchAttribution` to the last. Both are `BaseAttribution` models with
+the same `fit` / `get_attribution` / `summary` API, the same validation of
+journeys and binary outcomes, the same `conversion_labels` handling, and the
+same normalization contract: `attribution` is `None`, with
+`normalization_reason="zero_raw_magnitude"`, when no conversion can be
+credited to a channel. The raw counts are returned as
+`credited_conversions`.
+
+```python
+comparison = CompareAttribution(
+    conversion_labels=["Purchase"], include_baselines=True
+)
+comparison.fit(journeys, conversions)
+
+comparison.attribution_frame()      #           markov   shapley  first_touch  last_touch
+                                    # Direct  0.071429  0.142857     0.142857    0.142857
+                                    # Email   0.357143  0.309524     0.142857    0.428571
+                                    # Search  0.214286  0.166667     0.428571    0.000000
+                                    # Social  0.357143  0.380952     0.285714    0.428571
+comparison.difference_frame("last_touch")
+```
+
+The baselines are opt-in: without `include_baselines=True` the comparison
+holds only the `markov` and `shapley` columns, exactly as before. The
+classes can also be used on their own or passed through `extra_models`.
+`extra_models={...}` plugs any additional `BaseAttribution` implementation
+into the same aligned tables, so a custom baseline can sit beside the
+built-in ones.
 
 ### Conversion-endpoint declaration
 

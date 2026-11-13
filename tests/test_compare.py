@@ -9,6 +9,8 @@ import pytest
 from do_attribution import (
     BaseAttribution,
     CompareAttribution,
+    FirstTouchAttribution,
+    LastTouchAttribution,
     MarkovAttribution,
     ShapleyAttribution,
 )
@@ -162,6 +164,199 @@ def test_default_comparison_has_no_unavailable_models(
     assert frame["markov"].sum() == pytest.approx(1.0)
     assert frame["shapley"].sum() == pytest.approx(1.0)
     assert not cmp_.difference_frame("markov").isna().any().any()
+
+
+# --------------------------------------------------------------------------- #
+# Built-in first-touch and last-touch baselines (opt-in)                      #
+# --------------------------------------------------------------------------- #
+def test_baselines_are_off_by_default(example_paths, example_conversions):
+    cmp_ = CompareAttribution(conversion_labels=["Purchase"])
+    results = cmp_.fit(example_paths, example_conversions)
+
+    assert cmp_.baselines == {}
+    assert list(results) == ["markov", "shapley"]
+    assert list(cmp_.attribution_frame().columns) == ["markov", "shapley"]
+    assert list(cmp_.difference_frame("markov").columns) == ["shapley_minus_markov"]
+
+
+def test_include_baselines_adds_first_and_last_touch_columns(
+    example_paths, example_conversions
+):
+    cmp_ = CompareAttribution(conversion_labels=["Purchase"], include_baselines=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        results = cmp_.fit(example_paths, example_conversions)
+
+    assert list(results) == ["markov", "shapley", "first_touch", "last_touch"]
+    assert isinstance(cmp_.baselines["first_touch"], FirstTouchAttribution)
+    assert isinstance(cmp_.baselines["last_touch"], LastTouchAttribution)
+    assert all(
+        isinstance(model, BaseAttribution) for model in cmp_.baselines.values()
+    )
+
+    frame = cmp_.attribution_frame()
+    assert list(frame.columns) == ["markov", "shapley", "first_touch", "last_touch"]
+    assert list(frame.index) == ["Direct", "Email", "Search", "Social"]
+    assert frame["first_touch"].to_dict() == pytest.approx(
+        {"Direct": 1 / 7, "Email": 1 / 7, "Search": 3 / 7, "Social": 2 / 7}
+    )
+    assert frame["last_touch"].to_dict() == pytest.approx(
+        {"Direct": 1 / 7, "Email": 3 / 7, "Search": 0.0, "Social": 3 / 7}
+    )
+    for column in frame.columns:
+        assert frame[column].sum() == pytest.approx(1.0)
+    assert cmp_.unavailable_models() == {}
+
+
+def test_baseline_columns_equal_the_standalone_baseline_fits(
+    example_paths, example_conversions
+):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        without = CompareAttribution(conversion_labels=["Purchase"])
+        without.fit(example_paths, example_conversions)
+        with_baselines = CompareAttribution(
+            conversion_labels=["Purchase"], include_baselines=True
+        )
+        results = with_baselines.fit(example_paths, example_conversions)
+
+    assert results["first_touch"] == FirstTouchAttribution(
+        conversion_labels=["Purchase"]
+    ).fit(example_paths, example_conversions)
+    assert results["last_touch"] == LastTouchAttribution(
+        conversion_labels=["Purchase"]
+    ).fit(example_paths, example_conversions)
+    # Adding the reference points leaves the two models' columns untouched.
+    frame = with_baselines.attribution_frame()
+    for column in ("markov", "shapley"):
+        assert frame[column].equals(without.attribution_frame()[column])
+
+
+def test_baselines_inherit_separator_and_conversion_labels():
+    cmp_ = CompareAttribution(
+        separator="|", conversion_labels=["Sale"], include_baselines=True
+    )
+    for model in cmp_.baselines.values():
+        assert model.separator == "|"
+        assert model.conversion_labels == frozenset({"Sale"})
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        cmp_.fit(["A|B|Sale", "B|Sale"], [1, 1])
+
+    frame = cmp_.attribution_frame()
+    assert list(frame.index) == ["A", "B"]
+    assert frame["first_touch"].to_dict() == {"A": 0.5, "B": 0.5}
+    assert frame["last_touch"].to_dict() == {"A": 0.0, "B": 1.0}
+
+
+def test_models_can_be_read_against_a_baseline_reference(
+    example_paths, example_conversions
+):
+    cmp_ = CompareAttribution(conversion_labels=["Purchase"], include_baselines=True)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        cmp_.fit(example_paths, example_conversions)
+
+    frame = cmp_.attribution_frame()
+    diff = cmp_.difference_frame("last_touch")
+    assert list(diff.columns) == [
+        "markov_minus_last_touch",
+        "shapley_minus_last_touch",
+        "first_touch_minus_last_touch",
+    ]
+    assert diff["markov_minus_last_touch"].to_dict() == pytest.approx(
+        (frame["markov"] - frame["last_touch"]).to_dict()
+    )
+    # Search never closes a converting journey but opens three of them.
+    assert diff.loc["Search", "first_touch_minus_last_touch"] == pytest.approx(3 / 7)
+
+
+def test_baseline_columns_are_missing_when_nothing_can_be_credited():
+    cmp_ = CompareAttribution(
+        markov_removal_strategy="redirect_to_null", include_baselines=True
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        results = cmp_.fit(["A", "B"], [0, 0])
+
+    assert results["first_touch"]["attribution"] is None
+    assert results["last_touch"]["credited_conversions"] == {"A": 0.0, "B": 0.0}
+    assert cmp_.unavailable_models() == {
+        "markov": "zero_raw_magnitude",
+        "shapley": "zero_raw_magnitude",
+        "first_touch": "zero_raw_magnitude",
+        "last_touch": "zero_raw_magnitude",
+    }
+    frame = cmp_.attribution_frame()
+    assert frame.isna().all().all()
+
+
+def test_baselines_precede_extra_models_and_reject_reserved_names(
+    example_paths, example_conversions
+):
+    extra = FirstTouchAttribution(conversion_labels=["Purchase"])
+    cmp_ = CompareAttribution(
+        conversion_labels=["Purchase"],
+        include_baselines=True,
+        extra_models={"custom": extra},
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        cmp_.fit(example_paths, example_conversions)
+    frame = cmp_.attribution_frame()
+    assert list(frame.columns) == [
+        "markov",
+        "shapley",
+        "first_touch",
+        "last_touch",
+        "custom",
+    ]
+    assert frame["custom"].equals(frame["first_touch"].rename("custom"))
+
+    with pytest.raises(ValueError, match="built-in baseline names"):
+        CompareAttribution(
+            include_baselines=True,
+            extra_models={"last_touch": LastTouchAttribution()},
+        )
+    with pytest.raises(TypeError, match="include_baselines must be a bool"):
+        CompareAttribution(include_baselines="yes")
+
+
+def test_baseline_classes_still_plug_in_through_extra_models(
+    example_paths, example_conversions
+):
+    """The opt-in flag is a convenience over the existing seam."""
+    cmp_ = CompareAttribution(
+        conversion_labels=["Purchase"],
+        extra_models={
+            "last_touch": LastTouchAttribution(conversion_labels=["Purchase"])
+        },
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        cmp_.fit(example_paths, example_conversions)
+
+    frame = cmp_.attribution_frame()
+    assert list(frame.columns) == ["markov", "shapley", "last_touch"]
+    assert frame["last_touch"].sum() == pytest.approx(1.0)
+
+
+@pytest.mark.parametrize(
+    ("conversions", "error", "pattern"),
+    [
+        ([0.9, 1.9], ValueError, r"index 0 must be 0 or 1, got 0\.9$"),
+        ([0, float("nan")], ValueError, r"got missing value nan$"),
+        (1, TypeError, r"not a bare int: 1$"),
+    ],
+)
+def test_comparison_with_baselines_rejects_invalid_outcomes(
+    conversions, error, pattern
+):
+    cmp_ = CompareAttribution(
+        markov_removal_strategy="redirect_to_null", include_baselines=True
+    )
+    with pytest.raises(error, match=pattern):
+        cmp_.fit(["A", "B"], conversions)
 
 
 # --------------------------------------------------------------------------- #

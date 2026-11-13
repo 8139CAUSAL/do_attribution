@@ -16,6 +16,7 @@ import numpy as np
 import pandas as pd
 
 from .base import BaseAttribution
+from .baselines import FirstTouchAttribution, LastTouchAttribution
 from .markov import MarkovAttribution
 from .shapley import ShapleyAttribution
 from .utils import DEFAULT_SEPARATOR, extract_channels
@@ -42,7 +43,19 @@ class CompareAttribution:
         :class:`do_attribution.base.BaseAttribution` for full semantics.
     shapley_characteristic_function : {'cumulative', 'exact'}, default='cumulative'
         Coalition game forwarded to :class:`ShapleyAttribution`.
+    include_baselines : bool, default=False
+        When ``True``, also fit the built-in single-touch baselines,
+        :class:`~do_attribution.baselines.FirstTouchAttribution` and
+        :class:`~do_attribution.baselines.LastTouchAttribution`, with this
+        comparison's ``separator`` and ``conversion_labels``.  They appear as
+        the ``'first_touch'`` and ``'last_touch'`` results and columns, after
+        ``'markov'`` and ``'shapley'`` and before any ``extra_models``, as
+        fixed reference points for reading a Markov/Shapley disagreement.
+        The default leaves the comparison exactly as it was.
     """
+
+    #: Result and column names of the built-in baselines, in output order.
+    BASELINE_NAMES = ("first_touch", "last_touch")
 
     def __init__(
         self,
@@ -52,6 +65,7 @@ class CompareAttribution:
         extra_models: Optional[Dict[str, BaseAttribution]] = None,
         conversion_labels: Optional[Iterable[str]] = None,  # MODIFIED: P0.
         shapley_characteristic_function: str = "cumulative",
+        include_baselines: bool = False,
     ) -> None:
         self.separator = separator
         # MODIFIED (P0): store conversion_labels so both extract_channels()
@@ -72,6 +86,31 @@ class CompareAttribution:
             characteristic_function=shapley_characteristic_function,
         )
         self.extra_models: Dict[str, BaseAttribution] = dict(extra_models or {})
+        if not isinstance(include_baselines, bool):
+            raise TypeError(
+                "include_baselines must be a bool, got "
+                f"{type(include_baselines).__name__}"
+            )
+        # The built-in baselines enter through the same seam as extra_models:
+        # each is a BaseAttribution fitted on the same data.
+        self.baselines: Dict[str, BaseAttribution] = {}
+        if include_baselines:
+            reserved = [
+                name for name in self.BASELINE_NAMES if name in self.extra_models
+            ]
+            if reserved:
+                raise ValueError(
+                    "extra_models must not reuse the built-in baseline names "
+                    f"{reserved} when include_baselines=True"
+                )
+            self.baselines = {
+                "first_touch": FirstTouchAttribution(
+                    separator=separator, conversion_labels=conversion_labels
+                ),
+                "last_touch": LastTouchAttribution(
+                    separator=separator, conversion_labels=conversion_labels
+                ),
+            }
 
         self._results: Dict[str, Dict[str, Any]] = {}
         self.channels: List[str] = []
@@ -89,9 +128,11 @@ class CompareAttribution:
         Returns
         -------
         dict
-            Keys are the model names (``'markov'``, ``'shapley'``, plus any
-            keys from ``extra_models``). Values are the raw result dicts
-            returned by each model's own ``fit``.
+            Keys are the model names (``'markov'``, ``'shapley'``, then
+            ``'first_touch'`` and ``'last_touch'`` when
+            ``include_baselines=True``, plus any keys from
+            ``extra_models``). Values are the raw result dicts returned by
+            each model's own ``fit``.
         """
         # MODIFIED (P0): pass conversion_labels to extract_channels so the
         # endpoint tokens never show up in self.channels / attribution_frame.
@@ -102,6 +143,8 @@ class CompareAttribution:
             "markov": self.markov.fit(paths, conversions),
             "shapley": self.shapley.fit(paths, conversions),
         }
+        for name, model in self.baselines.items():
+            self._results[name] = model.fit(paths, conversions)
         for name, model in self.extra_models.items():
             self._results[name] = model.fit(paths, conversions)
         return self._results

@@ -15,6 +15,7 @@ REQUIRED_PACKAGE_MODULES = {
     "_static_export.py",
     "_temporal_helpers.py",
     "base.py",
+    "baselines.py",
     "calibration.py",
     "compare.py",
     "markov.py",

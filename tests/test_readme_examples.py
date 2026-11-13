@@ -123,3 +123,26 @@ def test_side_by_side_comparison_output() -> None:
         assert line in README, line
     assert comparison.unavailable_models() == {}
     assert "comparison.unavailable_models()     # {}" in README
+
+
+def test_side_by_side_comparison_with_baselines_output() -> None:
+    with warnings.catch_warnings():
+        # The default Markov strategy emits a one-time migration notice.
+        warnings.simplefilter("ignore", UserWarning)
+        comparison = CompareAttribution(
+            conversion_labels=["Purchase"], include_baselines=True
+        )
+        comparison.fit(JOURNEYS, CONVERSIONS)
+
+    frame = comparison.attribution_frame()
+    assert list(frame.columns) == ["markov", "shapley", "first_touch", "last_touch"]
+    assert (
+        "#           markov   shapley  first_touch  last_touch" in README
+    )
+    for channel, row in frame.iterrows():
+        line = (
+            f"# {channel:<6}  {row['markov']:.6f}  {row['shapley']:.6f}"
+            f"     {row['first_touch']:.6f}    {row['last_touch']:.6f}"
+        )
+        assert line in README, line
+    assert 'comparison.difference_frame("last_touch")' in README
