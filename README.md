@@ -249,6 +249,19 @@ identifies candidate temporal boundaries.
 | <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/ga4_model_comparison.png" width="420" alt="GA4 Markov vs Shapley comparison chart"> | <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/ga4_markov_epoch_recommendation.png" width="420" alt="GA4 epoch recommendation diagnostic plot"> |
 | `plot_attribution_comparison` — Markov and Shapley attribution on the same journeys | `plot_epoch_recommendation` — candidate and retained epoch boundaries on the conversion-rate signal |
 
+The calibration example starts from the experiment. One figure follows the
+randomized outcomes into the calibration: what each arm converted, the
+estimated lift with its 95% confidence interval beside the matched attribution
+estimate, and the calibration ratio of each epoch. The December ratio is
+marked as interpolated because no experiment ran in that month. The interval
+belongs to the experimental lift only; calibration does not propagate the
+standard error, so no ratio and no calibrated estimate carries one.
+
+| |
+| :---: |
+| <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/calibration_experimental_evidence.png" width="860" alt="Experimental lift evidence and its translation into attribution calibration: arm outcomes, lift with 95% confidence interval versus matched MTA estimate, and calibration ratios across time"> |
+| `plot_experimental_evidence` in `examples/calibration_workflow.py` — randomized outcomes, estimated lift versus matched attribution, and observed versus interpolated calibration ratios |
+
 Calibration diagnostics keep experimental evidence, constructed calibration
 ratios, direct adjustments, and policy-based residual allocation visually
 distinct.
@@ -706,7 +719,7 @@ path, a binary conversion flag, and an anchor timestamp.
 | [`examples/side_by_side.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/side_by_side.ipynb) | `CompareAttribution` aligned tables, differences, comparison plot |
 | [`examples/temporal_markov.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/temporal_markov.ipynb) | weekly Markov epochs, diagnostics, `to_dataframes()`, epoch recommendation |
 | [`examples/temporal_shapley.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/temporal_shapley.ipynb) | weekly Shapley epochs, channel trends, diagnostics, epoch recommendation |
-| [`examples/attribution_experiment_calibration.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/attribution_experiment_calibration.ipynb) | seeded semi-synthetic randomized campaign on the GA4 rows, matched static and temporal Markov estimates, calibration, and seven diagnostics |
+| [`examples/attribution_experiment_calibration.ipynb`](https://github.com/8139CAUSAL/do_attribution/blob/v0.0.2/examples/attribution_experiment_calibration.ipynb) | seeded semi-synthetic randomized campaign on the GA4 rows, matched static and temporal Markov estimates, calibration, the experimental-evidence figure, and seven calibration diagnostics |
 
 
 ---
