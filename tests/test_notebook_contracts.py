@@ -135,7 +135,7 @@ def test_every_figure_is_displayed_exactly_once() -> None:
     for the same figure.
     """
     expected_image_counts = {
-        "attribution_experiment_calibration.ipynb": 7,
+        "attribution_experiment_calibration.ipynb": 8,
         "basic_markov.ipynb": 3,
         "basic_shapley.ipynb": 2,
         "methodological_stress_tests.ipynb": 0,
