@@ -102,6 +102,7 @@ def test_every_plot_and_reporting_projection_reads_without_mutating_state() -> N
     figures = [
         result.plot_epoch_alignment(),
         result.plot_ratio_schedule(),
+        result.plot_evidence_uncertainty(),
         result.plot_calibration_effects(),
         result.plot_residual_allocation(),
         result.plot_entity_mix(),

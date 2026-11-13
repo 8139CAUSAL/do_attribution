@@ -166,6 +166,7 @@ EXPECTED_METHODS = {
         "summary",
         "plot_epoch_alignment",
         "plot_ratio_schedule",
+        "plot_evidence_uncertainty",
         "plot_calibration_effects",
         "plot_residual_allocation",
         "plot_entity_mix",

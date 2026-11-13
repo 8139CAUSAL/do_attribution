@@ -93,6 +93,57 @@ def test_summary_exposes_every_temporal_audit_layer_and_uncovered_epoch() -> Non
     assert "Calibrated total: 200.00" in summary
 
 
+def test_summary_puts_lift_and_reported_uncertainty_beside_each_evidence_record() -> None:
+    evidence = [
+        LiftTestEvidence(
+            tested_entity="A",
+            observed_lift=80.0,
+            matched_mta_estimate=100.0,
+            test_id="a-left",
+            coordinate_name="time",
+            coordinate_value=2.0,
+            standard_error=5.0,
+        ),
+        _evidence("a-right", 1.0, 8.0),
+    ]
+    summary = (
+        TemporalAttributionCalibration(evidence)
+        .apply_estimates(
+            {"E1": {"A": 100.0, "B": 100.0}},
+            ratio_policy="observed_only",
+            epoch_ratio_policy="direct",
+            residual_policy="allow_total_change",
+            epoch_windows={"E1": (0.0, 10.0)},
+            evidence_conflict_policy="select_evidence",
+            selected_evidence={("A", "E1"): "a-left"},
+        )
+        .summary()
+    )
+    lines = summary.splitlines()
+
+    left = lines.index("- A evidence a-left:")
+    assert lines[left + 1 : left + 5] == [
+        "  coordinate time = 2.0",
+        "  observed calibration ratio = 0.8000",
+        "  observed lift ± standard error = 80.00 ± 5.00 (standard error "
+        "reported by the experiment; calibration does not use it)",
+        "  matched epoch = E1",
+    ]
+    right = lines.index("- A evidence a-right:")
+    assert lines[right + 1 : right + 5] == [
+        "  coordinate time = 8.0",
+        "  observed calibration ratio = 1.0000",
+        "  observed lift ± standard error = 100.00; no uncertainty supplied",
+        "  matched epoch = E1",
+    ]
+    # The annotations stay inside the observed-evidence section.
+    section_end = lines.index("Coordinate schedule construction")
+    assert all(
+        "standard error" not in line and "uncertainty" not in line
+        for line in lines[section_end:]
+    )
+
+
 def _conflict_summary(policy: str) -> str:
     evidence = [
         _evidence("a-low", 0.8, 2.0),

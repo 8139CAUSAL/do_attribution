@@ -295,6 +295,39 @@ def _copy_lift_test_evidence(record: LiftTestEvidence) -> LiftTestEvidence:
     )
 
 
+# Evidence-uncertainty annotations.  ``standard_error`` is the uncertainty the
+# external experiment reported for its observed lift.  It is displayed beside
+# the evidence it belongs to and nowhere else: it is never an interval on a
+# calibrated value, and no calibrated number depends on it.
+_NO_UNCERTAINTY_SUPPLIED = "no uncertainty supplied"
+_UNCERTAINTY_REPORTED = "standard error reported by the experiment"
+
+
+def _evidence_uncertainty_status(record: LiftTestEvidence) -> str:
+    """State whether the experiment reported a standard error for its lift."""
+
+    if record.standard_error is None:
+        return _NO_UNCERTAINTY_SUPPLIED
+    return _UNCERTAINTY_REPORTED
+
+
+def _observed_lift_annotation(record: LiftTestEvidence) -> str:
+    """Render ``observed lift ± standard error`` for one evidence record.
+
+    A record without a standard error renders the explicit
+    ``no uncertainty supplied`` state instead of an implied zero.
+    """
+
+    lift = 0.0 if record.observed_lift == 0.0 else record.observed_lift
+    if record.standard_error is None:
+        return f"{lift:.2f}; {_NO_UNCERTAINTY_SUPPLIED}"
+    error = 0.0 if record.standard_error == 0.0 else record.standard_error
+    return (
+        f"{lift:.2f} ± {error:.2f} "
+        f"({_UNCERTAINTY_REPORTED}; calibration does not use it)"
+    )
+
+
 @dataclass(frozen=True)
 class _EvidenceCollection:
     records: tuple[LiftTestEvidence, ...]
@@ -6568,6 +6601,10 @@ class CalibrationResult:
                     f"{amount(evidence.observed_lift)} / "
                     f"{amount(evidence.matched_mta_estimate)}."
                 )
+                lines.append(
+                    "  Observed lift ± standard error: "
+                    f"{_observed_lift_annotation(evidence)}."
+                )
             lines.extend(
                 [
                     f"  Original estimate: {amount(row.original_estimate)}",
@@ -6940,9 +6977,13 @@ class TemporalCalibrationResult:
         Reporting tables are added in their documented contract order.  The
         evidence table retains every normalized observation, including points
         unmatched to an authoritative epoch and members of conflict groups.
+        Beside each observation it carries the experiment's ``observed_lift``
+        and reported ``standard_error``, with ``uncertainty_status`` stating
+        explicitly when no uncertainty was supplied.  Those three columns
+        annotate the evidence only; no other table depends on them.
         """
 
-        evidence_columns = (
+        point_columns = (
             "tested_entity",
             "evidence_id",
             "observed_ratio",
@@ -6953,13 +6994,23 @@ class TemporalCalibrationResult:
             "matched_epoch",
             "conflict_group",
         )
-        evidence_records = [
-            {
+        evidence_columns = point_columns + (
+            "observed_lift",
+            "standard_error",
+            "uncertainty_status",
+        )
+        evidence_by_id = {item.test_id: item for item in self.evidence}
+        evidence_records = []
+        for point in self.evidence_points:
+            record = {
                 column: deepcopy(getattr(point, column))
-                for column in evidence_columns
+                for column in point_columns
             }
-            for point in self.evidence_points
-        ]
+            source = evidence_by_id[point.evidence_id]
+            record["observed_lift"] = source.observed_lift
+            record["standard_error"] = source.standard_error
+            record["uncertainty_status"] = _evidence_uncertainty_status(source)
+            evidence_records.append(record)
         tables = {
             "evidence": pd.DataFrame.from_records(
                 evidence_records,
@@ -7293,6 +7344,7 @@ class TemporalCalibrationResult:
                 ]
             )
 
+        evidence_by_id = {item.test_id: item for item in self.evidence}
         lines.extend(["", "Observed evidence"])
         for point in self.evidence_points:
             lines.append(
@@ -7308,6 +7360,10 @@ class TemporalCalibrationResult:
             lines.append(
                 "  observed calibration ratio = "
                 f"{ratio(point.observed_ratio)}"
+            )
+            lines.append(
+                "  observed lift ± standard error = "
+                f"{_observed_lift_annotation(evidence_by_id[point.evidence_id])}"
             )
             if point.matched_epoch is None:
                 lines.append("  matched epoch: none (observation retained)")
@@ -7761,6 +7817,7 @@ class TemporalCalibrationResult:
             entity: colors[index % len(colors)]
             for index, entity in enumerate(entity_order)
         }
+        evidence_by_id = {item.test_id: item for item in self.evidence}
 
         coordinate_keys: list[tuple[Any, Any]] = []
         for row in self.coordinate_ratio_schedule:
@@ -7828,6 +7885,42 @@ class TemporalCalibrationResult:
                     zorder=3,
                     label=f"{legend_prefix} — {entity}",
                 )
+                if source != "observed":
+                    continue
+                # An observed anchor is the experiment's lift divided by its
+                # matched attribution estimate, so the experiment's reported
+                # standard error of that lift sits on this axis after the
+                # same division.  The bar annotates the evidence only; it is
+                # not an interval on any constructed or calibrated value.
+                reported = tuple(
+                    (row, evidence_by_id[row.source_evidence_ids[0]])
+                    for row in selected
+                    if evidence_by_id[row.source_evidence_ids[0]].standard_error
+                    is not None
+                )
+                if reported:
+                    schedule_ax.errorbar(
+                        [
+                            coordinate_position[
+                                (row.coordinate_name, row.coordinate_value)
+                            ]
+                            for row, _ in reported
+                        ],
+                        [row.schedule_ratio for row, _ in reported],
+                        yerr=[
+                            item.standard_error / abs(item.matched_mta_estimate)
+                            for _, item in reported
+                        ],
+                        fmt="none",
+                        ecolor=color_by_entity[entity],
+                        elinewidth=1.3,
+                        capsize=4,
+                        zorder=2,
+                        label=(
+                            "Experiment-reported ±1 SE of observed lift "
+                            f"(ratio scale) — {entity}"
+                        ),
+                    )
             unsupported = tuple(
                 row for row in rows if row.schedule_source == "unsupported"
             )
@@ -7958,6 +8051,108 @@ class TemporalCalibrationResult:
         epoch_handles, epoch_labels = epoch_ax.get_legend_handles_labels()
         if epoch_handles:
             epoch_ax.legend(epoch_handles, epoch_labels, loc="best")
+        fig.tight_layout()
+        return fig
+
+    def plot_evidence_uncertainty(self) -> Any:
+        """Plot each evidence record's observed lift with its reported uncertainty.
+
+        One row per stored evidence record, in evidence order, on an axis in
+        the experiment's own lift units.  The point is the observed lift.  A
+        horizontal bar spans ``observed lift ± standard_error`` when the
+        experiment reported a standard error; a record without one is drawn
+        as a point with no bar and labelled ``no uncertainty supplied``.
+
+        The bars are the experiment's reported standard error of its observed
+        lift.  They are not intervals on calibrated output, attribution
+        estimates, calibration ratios, or schedule values, and nothing in the
+        calibration arithmetic reads them.
+        """
+
+        import matplotlib.pyplot as plt  # lazy optional dependency
+
+        records = self.evidence
+        figure_height = max(3.6, 0.7 * len(records) + 2.4)
+        fig, ax = plt.subplots(figsize=(12, figure_height))
+        positions = [float(index) for index in range(len(records))]
+        colors = plt.cm.tab10.colors
+        entity_order = tuple(
+            dict.fromkeys(record.tested_entity for record in records)
+        )
+
+        for entity_index, entity in enumerate(entity_order):
+            color = colors[entity_index % len(colors)]
+            placed = tuple(
+                (position, record)
+                for position, record in zip(positions, records)
+                if record.tested_entity == entity
+            )
+            reported = tuple(
+                (position, record)
+                for position, record in placed
+                if record.standard_error is not None
+            )
+            if reported:
+                ax.errorbar(
+                    [record.observed_lift for _, record in reported],
+                    [position for position, _ in reported],
+                    xerr=[record.standard_error for _, record in reported],
+                    fmt="none",
+                    ecolor=color,
+                    elinewidth=1.6,
+                    capsize=5,
+                    zorder=2,
+                    label=f"Experiment-reported ±1 standard error — {entity}",
+                )
+            ax.scatter(
+                [record.observed_lift for _, record in placed],
+                [position for position, _ in placed],
+                marker="o",
+                s=65,
+                color=color,
+                edgecolor="black",
+                linewidth=0.5,
+                zorder=3,
+                label=f"Observed experimental lift — {entity}",
+            )
+
+        for position, record in zip(positions, records):
+            if record.standard_error is None:
+                text = f"{record.observed_lift:.2f} ({_NO_UNCERTAINTY_SUPPLIED})"
+            else:
+                text = (
+                    f"{record.observed_lift:.2f} ± {record.standard_error:.2f}"
+                )
+            ax.annotate(
+                text,
+                (record.observed_lift, position),
+                xytext=(0, 9),
+                textcoords="offset points",
+                ha="center",
+                fontsize=8,
+            )
+
+        ax.axvline(0.0, color="0.2", linewidth=0.8)
+        ax.margins(x=0.1)
+        ax.set_yticks(positions)
+        ax.set_yticklabels(
+            [f"{record.test_id} ({record.tested_entity})" for record in records]
+        )
+        ax.set_ylim(len(records) - 0.4, -0.6)
+        ax.set_xlabel(
+            "Observed experimental lift\n"
+            "Bars: ±1 standard error reported by the experiment for its "
+            "observed lift —\n"
+            "not a confidence interval on calibrated output or attribution "
+            "estimates"
+        )
+        ax.set_ylabel("Evidence record")
+        ax.set_title(
+            "Experimental Evidence: Observed Lift ± Experiment-Reported "
+            "Standard Error"
+        )
+        ax.grid(axis="x", alpha=0.2)
+        ax.legend(loc="best")
         fig.tight_layout()
         return fig
 

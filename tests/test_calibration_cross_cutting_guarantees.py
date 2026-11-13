@@ -417,6 +417,7 @@ def test_diagnostics_do_not_mutate_results_or_become_applied_policy() -> None:
     result.to_dataframes()
     result.plot_epoch_alignment()
     result.plot_ratio_schedule()
+    result.plot_evidence_uncertainty()
     result.plot_calibration_effects()
     result.plot_residual_allocation()
     result.plot_entity_mix()

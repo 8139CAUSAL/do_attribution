@@ -1,10 +1,11 @@
 # Calibration diagnostics and plots
 
 Calibration diagnostics explain stored deterministic results and compare only
-the alternatives a caller explicitly requests. The result exposes exactly six plotting methods:
+the alternatives a caller explicitly requests. The result exposes exactly seven plotting methods:
 
 - `plot_epoch_alignment()`
 - `plot_ratio_schedule()`
+- `plot_evidence_uncertainty()`
 - `plot_calibration_effects()`
 - `plot_residual_allocation()`
 - `plot_entity_mix()`
@@ -13,6 +14,18 @@ the alternatives a caller explicitly requests. The result exposes exactly six pl
 The plots distinguish observed evidence, constructed schedule values, final
 effective ratios, evidence-backed direct adjustments, and policy-allocated
 residuals.
+
+`plot_evidence_uncertainty()` draws one row per stored evidence record on an
+axis in the experiment's own lift units: the observed lift as a point, with a
+horizontal bar of ±1 `standard_error` where the experiment reported one. A
+record without a standard error is a point with no bar, labelled
+`no uncertainty supplied`. `plot_ratio_schedule()` carries the same reported
+error on its observed anchors, divided by the matched attribution estimate so
+it sits on the ratio axis. These bars are the experiment's reported
+uncertainty about its own observed lift. They are never an interval on a
+constructed schedule value, an effective ratio, or calibrated output, and no
+calibrated number reads `standard_error`. `plot_epoch_alignment()` has no
+lift axis and draws no uncertainty.
 
 ## Generated calibration visual artifact bank
 
@@ -113,6 +126,7 @@ The following methods plot the stored state without refitting:
 figures = [
     result.plot_epoch_alignment(),
     result.plot_ratio_schedule(),
+    result.plot_evidence_uncertainty(),
     result.plot_calibration_effects(),
     result.plot_residual_allocation(),
     result.plot_entity_mix(),

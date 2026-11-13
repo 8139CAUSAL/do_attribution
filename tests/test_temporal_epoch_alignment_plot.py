@@ -172,3 +172,53 @@ def test_plot_without_windows_uses_authoritative_epoch_categories() -> None:
         ) == snapshot
     finally:
         plt.close(figure)
+
+
+def test_reported_standard_error_does_not_change_the_alignment_plot() -> None:
+    """This plot has no lift axis; uncertainty belongs to
+    plot_evidence_uncertainty and to the ratio-schedule anchors."""
+
+    def result_with(standard_error):
+        evidence = [
+            LiftTestEvidence(
+                tested_entity="A",
+                observed_lift=80.0,
+                matched_mta_estimate=100.0,
+                test_id="a-one",
+                coordinate_name="time",
+                coordinate_value=2.0,
+                standard_error=standard_error,
+            )
+        ]
+        return TemporalAttributionCalibration(evidence).apply_estimates(
+            {"E1": {"A": 100.0}},
+            ratio_policy="observed_only",
+            epoch_ratio_policy="direct",
+            residual_policy="allow_total_change",
+            epoch_windows={"E1": (0.0, 10.0)},
+        )
+
+    def artists(figure):
+        axis = figure.axes[0]
+        return (
+            sorted(text.get_text() for text in axis.texts),
+            [
+                [tuple(point) for point in collection.get_offsets()]
+                for collection in axis.collections
+            ],
+            [tuple(line.get_xdata()) for line in axis.lines],
+            axis.get_legend_handles_labels()[1],
+            len(axis.containers),
+        )
+
+    figures = [
+        result_with(None).plot_epoch_alignment(),
+        result_with(25.0).plot_epoch_alignment(),
+    ]
+    try:
+        assert artists(figures[0]) == artists(figures[1])
+        assert artists(figures[1])[0] == ["Epoch E1", "a-one"]
+        assert artists(figures[1])[4] == 0
+    finally:
+        for figure in figures:
+            plt.close(figure)

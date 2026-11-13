@@ -95,8 +95,9 @@ chronological epochs.
   adjustments, residual allocation, evidence schedules, epoch-level
   reductions, and provenance explicitly separate.
 - **Calibration diagnostics.** One static adjustment-decomposition plot and
-  six temporal diagnostics show evidence alignment, ratio construction,
-  direct adjustments, residual allocation, entity mix, and evidence strength.
+  seven temporal diagnostics show evidence alignment, ratio construction,
+  experiment-reported evidence uncertainty, direct adjustments, residual
+  allocation, entity mix, and evidence strength.
 - **Reproducible outputs.** Deterministic model fits, deterministic
   renderers, and deterministic tie ordering — identical inputs always
   produce identical reports, tables, and figures.
@@ -279,6 +280,28 @@ Deterministic point calibration does not use or propagate it: changing
 residual allocation, or calibrated total.
 Calibrated point outputs therefore do not supply confidence intervals,
 posterior uncertainty, or uncertainty-adjusted calibration ratios.
+
+The standard error is displayed wherever the evidence itself is displayed,
+as the experiment's reported uncertainty about its own observed lift:
+
+- `summary()` (static and temporal) prints an
+  `Observed lift ± standard error` line under each evidence record, for
+  example `360.00 ± 25.00 (standard error reported by the experiment;
+  calibration does not use it)`. A record without one prints
+  `360.00; no uncertainty supplied`.
+- The temporal `to_dataframes()["evidence"]` table carries `observed_lift`,
+  `standard_error`, and `uncertainty_status` beside each record;
+  `uncertainty_status` reads `standard error reported by the experiment` or
+  `no uncertainty supplied`, so a missing value is never an implied zero.
+- `plot_evidence_uncertainty()` draws each evidence record's observed lift
+  on a lift axis with a horizontal ±1 standard-error bar, and labels a record
+  without one `no uncertainty supplied`. `plot_ratio_schedule()` draws the
+  same reported error on its observed anchors, divided by the matched
+  attribution estimate so it sits on the ratio axis. Constructed schedule
+  values, effective ratios, and calibrated estimates never carry a bar.
+
+Changing `standard_error` changes those annotations only; every calibrated
+number, schedule, and provenance record is identical.
 
 `AttributionCalibration` applies that evidence to caller-approved static
 attribution estimates. `TemporalAttributionCalibration` applies dated

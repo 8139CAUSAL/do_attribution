@@ -6,7 +6,7 @@ carry their own exact assertions, so a passing run proves every documented
 example executes, every documented plot method and artist exists, and the
 documented values match the tested behavior.
 
-Additional tests pin the statements CAL-094 requires: all six plotting methods
+Additional tests pin the statements CAL-094 requires: all seven plotting methods
 and the resolved diagnostic-alternative surface are documented; diagnostics are
 stated to expose alternatives without applying them; epochs are stated to be
 outcome-driven or user-supplied and never channel-owned; interpolation is
@@ -38,6 +38,7 @@ _PYTHON_BLOCK = re.compile(r"```python\n(.*?)```", re.DOTALL)
 PLOT_METHODS = (
     "plot_epoch_alignment",
     "plot_ratio_schedule",
+    "plot_evidence_uncertainty",
     "plot_calibration_effects",
     "plot_residual_allocation",
     "plot_entity_mix",
@@ -122,7 +123,7 @@ def test_every_documented_example_executes() -> None:
     ]
 
 
-def test_all_six_plotting_methods_are_documented_and_exist() -> None:
+def test_all_seven_plotting_methods_are_documented_and_exist() -> None:
     document = _document()
     namespace = _executed_namespace()
     result = namespace["result"]
@@ -133,14 +134,14 @@ def test_all_six_plotting_methods_are_documented_and_exist() -> None:
             getattr(result, method_name)
         ), f"{method_name} does not exist on the result"
 
-    # Exactly six plotting methods exist; the document claims no others.
+    # Exactly seven plotting methods exist; the document claims no others.
     actual = {
         name
         for name in dir(result)
         if name.startswith("plot_") and callable(getattr(result, name))
     }
     assert actual == set(PLOT_METHODS)
-    assert re.search(r"exactly six plotting methods", document, re.IGNORECASE)
+    assert re.search(r"exactly seven plotting methods", document, re.IGNORECASE)
 
 
 def test_diagnostic_alternative_surface_is_documented_with_every_control() -> None:
