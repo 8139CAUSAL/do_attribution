@@ -24,13 +24,29 @@ def epoch_attribution(result: Mapping[str, Any]) -> Dict[str, float]:
 
 
 def pandas_freq_alias(freq_str: str) -> str:
-    """Translate legacy public aliases for pandas versions that retired them."""
+    """Translate legacy public aliases for pandas offset validation."""
     replacements = {"M": "ME", "Q": "QE", "Y": "YE", "A": "YE"}
     if freq_str in replacements:
         return replacements[freq_str]
     for old, new in (("Q-", "QE-"), ("A-", "YE-")):
         if freq_str.startswith(old):
             return new + freq_str[len(old):]
+    return freq_str
+
+
+def pandas_period_alias(freq_str: str) -> str:
+    """Translate annual aliases for pandas 3 period construction.
+
+    Annual periods require ``Y``/``Y-<month>``, while offsets use ``YE``.
+    Other period aliases, including ``M`` and ``Q``, stay unchanged.
+    """
+    if not isinstance(freq_str, str):
+        raise TypeError("freq alias must be a str")
+    for annual_alias in ("A", "YE"):
+        if freq_str == annual_alias:
+            return "Y"
+        if freq_str.startswith(annual_alias + "-"):
+            return "Y" + freq_str[len(annual_alias):]
     return freq_str
 
 
@@ -131,9 +147,9 @@ def bin_timestamps_to_epochs(
     for year in sorted(set(int(y) for y in years)):
         freq_for_year = resolve_freq(year)
         year_mask = np.asarray(years == year)
-        # Period aliases deliberately remain the legacy aliases: pandas
-        # 3 retired them for offsets but still requires them for Period.
-        year_periods = dt_index[year_mask].to_period(freq_for_year)
+        year_periods = dt_index[year_mask].to_period(
+            pandas_period_alias(freq_for_year)
+        )
         year_codes, year_uniques = pd.factorize(year_periods)
         # Register this year's periods chronologically so that epochs with
         # equal start times keep a deterministic year-then-time order.

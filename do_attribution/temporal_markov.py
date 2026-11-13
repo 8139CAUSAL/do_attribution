@@ -116,6 +116,7 @@ from ._temporal_helpers import (
     get_period_key as _get_period_key,
     matrix_to_long_frame as _matrix_to_long_frame,
     pandas_freq_alias as _pandas_freq_alias,
+    pandas_period_alias as _pandas_period_alias,
     periods_have_different_freq as _periods_have_different_freq,
     sample_sizes_to_long_frame as _sample_sizes_to_long_frame,
     validate_epoch_assignment as _validate_epoch_assignment,
@@ -553,7 +554,9 @@ class TemporalMarkovAttribution(MarkovAttribution):
             )
 
         try:
-            period_epochs = pd.to_datetime(epochs_arr).to_period(self.freq)
+            period_epochs = pd.to_datetime(epochs_arr).to_period(
+                _pandas_period_alias(self.freq)
+            )
         except (ValueError, TypeError):
             period_epochs = epochs_arr
 
