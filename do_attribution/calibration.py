@@ -8139,20 +8139,29 @@ class TemporalCalibrationResult:
             [f"{record.test_id} ({record.tested_entity})" for record in records]
         )
         ax.set_ylim(len(records) - 0.4, -0.6)
-        ax.set_xlabel(
-            "Observed experimental lift\n"
-            "Bars: ±1 standard error reported by the experiment for its "
-            "observed lift —\n"
-            "not a confidence interval on calibrated output or attribution "
-            "estimates"
-        )
+        ax.set_xlabel("Observed experimental lift")
         ax.set_ylabel("Evidence record")
         ax.set_title(
             "Experimental Evidence: Observed Lift ± Experiment-Reported "
             "Standard Error"
         )
         ax.grid(axis="x", alpha=0.2)
-        ax.legend(loc="best")
+        # The bars are explained where they are decoded, in the legend, so
+        # the axis label stays one line under any figure layout.
+        any_reported = any(
+            record.standard_error is not None for record in records
+        )
+        ax.legend(
+            loc="best",
+            title=(
+                "Bars: ±1 standard error reported by the experiment for its "
+                "observed lift —\nnot a confidence interval on calibrated "
+                "output or attribution estimates"
+                if any_reported
+                else None
+            ),
+            title_fontsize=8,
+        )
         fig.tight_layout()
         return fig
 

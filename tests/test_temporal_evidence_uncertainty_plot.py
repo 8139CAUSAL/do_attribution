@@ -164,16 +164,15 @@ def test_bars_are_labelled_as_the_experiments_reported_uncertainty() -> None:
             "Experiment-reported ±1 standard error — A",
             "Experiment-reported ±1 standard error — B",
         }
-        label = " ".join(axis.get_xlabel().split())
-        assert label.startswith("Observed experimental lift")
-        assert (
-            "±1 standard error reported by the experiment for its observed lift"
-            in label
+        assert axis.get_xlabel() == "Observed experimental lift"
+        # The legend, where the bars are decoded, says what they are and
+        # what they are not.
+        note = " ".join(axis.get_legend().get_title().get_text().split())
+        assert note == (
+            "Bars: ±1 standard error reported by the experiment for its "
+            "observed lift — not a confidence interval on calibrated output "
+            "or attribution estimates"
         )
-        assert (
-            "not a confidence interval on calibrated output or attribution "
-            "estimates"
-        ) in label
         for text in [axis.get_title(), *legend, *_annotations(axis)]:
             lowered = text.lower()
             assert "confidence" not in lowered
@@ -198,6 +197,9 @@ def test_records_without_a_standard_error_are_points_marked_no_uncertainty_suppl
             "Observed experimental lift — A",
             "Observed experimental lift — B",
         ]
+        # With no bars drawn there is no bar explanation either.
+        assert axis.get_legend().get_title().get_text() == ""
+        assert axis.get_xlabel() == "Observed experimental lift"
     finally:
         plt.close(figure)
 

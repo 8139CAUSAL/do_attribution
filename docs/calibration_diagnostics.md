@@ -38,6 +38,8 @@ fixed scenario:
 
 ![Temporal ratio schedule](../examples/images/calibration_temporal_ratio_schedule.png)
 
+![Temporal evidence uncertainty](../examples/images/calibration_temporal_evidence_uncertainty.png)
+
 ![Temporal calibration effects](../examples/images/calibration_temporal_effects.png)
 
 ![Temporal residual allocation](../examples/images/calibration_temporal_residual_allocation.png)

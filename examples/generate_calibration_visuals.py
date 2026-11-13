@@ -46,6 +46,7 @@ ARTIFACT_FILENAMES = (
     "calibration_static_effects.png",
     "calibration_temporal_epoch_alignment.png",
     "calibration_temporal_ratio_schedule.png",
+    "calibration_temporal_evidence_uncertainty.png",
     "calibration_temporal_effects.png",
     "calibration_temporal_residual_allocation.png",
     "calibration_temporal_entity_mix.png",
@@ -121,7 +122,7 @@ def _save_figure(figure: Any, destination: Path) -> None:
 def generate_calibration_visuals(
     output_dir: str | Path = DEFAULT_OUTPUT_DIR,
 ) -> tuple[Path, ...]:
-    """Generate all seven public calibration PNG artifacts."""
+    """Generate all eight public calibration PNG artifacts."""
 
     destination = Path(output_dir)
     destination.mkdir(parents=True, exist_ok=True)
@@ -135,6 +136,7 @@ def generate_calibration_visuals(
         static_result.plot_calibration_effects(),
         temporal_result.plot_epoch_alignment(),
         temporal_result.plot_ratio_schedule(),
+        temporal_result.plot_evidence_uncertainty(),
         temporal_result.plot_calibration_effects(),
         temporal_result.plot_residual_allocation(),
         temporal_result.plot_entity_mix(),
@@ -157,7 +159,7 @@ def _parser() -> argparse.ArgumentParser:
         "--output-dir",
         type=Path,
         default=DEFAULT_OUTPUT_DIR,
-        help="Directory that receives the seven deterministic PNG files.",
+        help="Directory that receives the eight deterministic PNG files.",
     )
     return parser
 

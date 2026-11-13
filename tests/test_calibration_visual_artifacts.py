@@ -27,6 +27,7 @@ EXPECTED_FILENAMES = (
     "calibration_static_effects.png",
     "calibration_temporal_epoch_alignment.png",
     "calibration_temporal_ratio_schedule.png",
+    "calibration_temporal_evidence_uncertainty.png",
     "calibration_temporal_effects.png",
     "calibration_temporal_residual_allocation.png",
     "calibration_temporal_entity_mix.png",
@@ -61,7 +62,7 @@ def test_checked_in_artifact_bank_has_exact_readable_png_inventory() -> None:
             assert image.height >= 450
 
 
-def test_generator_calls_all_seven_public_plot_methods(
+def test_generator_calls_all_eight_public_plot_methods(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
@@ -74,6 +75,7 @@ def test_generator_calls_all_seven_public_plot_methods(
         for name in (
             "plot_epoch_alignment",
             "plot_ratio_schedule",
+            "plot_evidence_uncertainty",
             "plot_calibration_effects",
             "plot_residual_allocation",
             "plot_entity_mix",
@@ -104,6 +106,7 @@ def test_generator_calls_all_seven_public_plot_methods(
         "CalibrationResult.plot_calibration_effects",
         "TemporalCalibrationResult.plot_epoch_alignment",
         "TemporalCalibrationResult.plot_ratio_schedule",
+        "TemporalCalibrationResult.plot_evidence_uncertainty",
         "TemporalCalibrationResult.plot_calibration_effects",
         "TemporalCalibrationResult.plot_residual_allocation",
         "TemporalCalibrationResult.plot_entity_mix",
