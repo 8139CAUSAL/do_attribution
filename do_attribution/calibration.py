@@ -8557,9 +8557,6 @@ class TemporalCalibrationResult:
             ax.axhline(0.0, color="black", linewidth=0.8)
             ax.set_ylabel("Share of epoch total")
             ax.grid(axis="y", alpha=0.2)
-            handles, labels = ax.get_legend_handles_labels()
-            if handles:
-                ax.legend(handles, labels, loc="best")
 
         draw_mix(original_ax, calibrated=False)
         draw_mix(calibrated_ax, calibrated=True)
@@ -8568,6 +8565,23 @@ class TemporalCalibrationResult:
         calibrated_ax.set_xticks(range(len(self.epochs)))
         calibrated_ax.set_xticklabels([str(epoch) for epoch in self.epochs])
         calibrated_ax.set_xlabel("Authoritative attribution epoch")
+
+        # The stacked bars fill each panel from edge to edge, so a legend
+        # placed inside an axes always hides shares.  Both panels draw every
+        # entity in the same color, so one key serves both; it sits outside
+        # the plot area, to the right of the top panel.
+        legend_entries: dict[str, Any] = {}
+        for ax in (original_ax, calibrated_ax):
+            for handle, label in zip(*ax.get_legend_handles_labels()):
+                legend_entries.setdefault(label, handle)
+        if legend_entries:
+            original_ax.legend(
+                list(legend_entries.values()),
+                list(legend_entries),
+                loc="upper left",
+                bbox_to_anchor=(1.01, 1.0),
+                borderaxespad=0.0,
+            )
         fig.tight_layout()
         return fig
 

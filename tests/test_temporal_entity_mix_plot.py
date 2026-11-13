@@ -96,6 +96,34 @@ def test_original_and_calibrated_shares_show_changing_multi_tested_mix() -> None
         plt.close(figure)
 
 
+def test_one_legend_sits_outside_both_plot_areas() -> None:
+    """The stacked bars fill each panel, so a legend inside an axes hides shares."""
+    result = _changing_mix_result()
+
+    figure = result.plot_entity_mix()
+    try:
+        original_ax, calibrated_ax = figure.axes
+        legend = original_ax.get_legend()
+        assert legend is not None
+        assert calibrated_ax.get_legend() is None
+        assert [text.get_text() for text in legend.get_texts()] == [
+            "Tested entity — A",
+            "Tested entity — D",
+            "Entity — B",
+            "Entity — C",
+        ]
+
+        figure.canvas.draw()
+        legend_box = legend.get_window_extent()
+        for ax in (original_ax, calibrated_ax):
+            assert not legend_box.overlaps(ax.get_window_extent())
+        # The layout makes room for the key instead of pushing it off-canvas.
+        assert figure.bbox.x0 <= legend_box.x0 < legend_box.x1 <= figure.bbox.x1
+        assert figure.bbox.y0 <= legend_box.y0 < legend_box.y1 <= figure.bbox.y1
+    finally:
+        plt.close(figure)
+
+
 def test_residual_bucket_is_preserved_as_a_distinct_mix_entity() -> None:
     result = TemporalAttributionCalibration([_evidence("A", "a-test")]).apply_estimates(
         {"E1": {"A": 100.0, "B": 100.0}},
