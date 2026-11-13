@@ -451,12 +451,18 @@ STATIC_MARKOV_DIAGNOSTIC_COLUMNS = [
     "return_transition_matrix",
     "conversion_probability",
 ] + NORMALIZATION_COLUMNS
-STATIC_SHAPLEY_DIAGNOSTIC_COLUMNS = [
-    "model",
-    "separator",
-    "conversion_labels",
-    "characteristic_function",
-] + NORMALIZATION_COLUMNS
+# Observation-weight totals close the Shapley diagnostics row for every fit.
+WEIGHT_COLUMNS = ["weights_supplied", "total_weight", "weighted_conversions"]
+STATIC_SHAPLEY_DIAGNOSTIC_COLUMNS = (
+    [
+        "model",
+        "separator",
+        "conversion_labels",
+        "characteristic_function",
+    ]
+    + NORMALIZATION_COLUMNS
+    + WEIGHT_COLUMNS
+)
 
 STATIC_PATHS = [
     "Email > Social > Purchase",
@@ -624,6 +630,154 @@ def test_static_shapley_export_matches_the_saved_fit_result(characteristic_funct
     assert row["conversion_labels"] == '["Purchase"]'
     assert row["characteristic_function"] == characteristic_function
     _assert_normalization_cells(row, result)
+
+
+# Zero weight on "Direct > Purchase": Direct is seen on no other journey.
+STATIC_WEIGHTS = [2.5, 1.0, 1.0, 4.0, 0.5, 0.0, 2.0, 1.5, 1.0, 3.0]
+STATIC_WEIGHTED_CHANNELS = ["Email", "Search", "Social"]
+
+
+def _fit_weighted_static_shapley(weights=STATIC_WEIGHTS, **kwargs):
+    kwargs.setdefault("conversion_labels", ["Purchase"])
+    model = ShapleyAttribution(**kwargs)
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        result = model.fit(STATIC_PATHS, STATIC_CONVERSIONS, weights=weights)
+    return model, result
+
+
+@pytest.mark.parametrize("characteristic_function", ["cumulative", "exact"])
+def test_static_shapley_unweighted_fit_exports_its_counts_as_weight_totals(
+    characteristic_function,
+):
+    model, _ = _fit_static_shapley(characteristic_function=characteristic_function)
+    diagnostics = model.to_dataframes()["fit_diagnostics"]
+
+    assert list(diagnostics.columns) == STATIC_SHAPLEY_DIAGNOSTIC_COLUMNS
+    assert diagnostics["weights_supplied"].dtype == bool
+    assert diagnostics["total_weight"].dtype == float
+    assert diagnostics["weighted_conversions"].dtype == float
+    row = diagnostics.iloc[0]
+    assert bool(row["weights_supplied"]) is False
+    assert row["total_weight"] == len(STATIC_PATHS)
+    assert row["weighted_conversions"] == sum(STATIC_CONVERSIONS)
+
+
+@pytest.mark.parametrize("characteristic_function", ["cumulative", "exact"])
+def test_static_shapley_weighted_fit_exports_weight_totals_and_fractional_values(
+    characteristic_function,
+):
+    model, result = _fit_weighted_static_shapley(
+        characteristic_function=characteristic_function
+    )
+    tables = model.to_dataframes()
+
+    # Same keys, same attribution / raw-value schemas, same diagnostics
+    # columns as an unweighted fit.
+    assert list(tables.keys()) == STATIC_SHAPLEY_KEYS
+    for frame in tables.values():
+        _assert_flat(frame)
+        _assert_scalar_cells(frame)
+    assert list(tables["attribution"].columns) == ["channel", "attribution"]
+    assert list(tables["shapley_values"].columns) == ["channel", "shapley_value"]
+    assert list(tables["fit_diagnostics"].columns) == STATIC_SHAPLEY_DIAGNOSTIC_COLUMNS
+    assert len(tables["fit_diagnostics"]) == 1
+
+    # A channel seen only on a zero-weight journey has no row.
+    for key in ("attribution", "shapley_values"):
+        assert tables[key]["channel"].tolist() == STATIC_WEIGHTED_CHANNELS
+    raw = _column_as_dict(tables["shapley_values"], "shapley_value")
+    assert raw == result["shapley_values"]
+    assert any(value != int(value) for value in raw.values())  # not truncated
+
+    diagnostics = tables["fit_diagnostics"]
+    assert diagnostics["weights_supplied"].dtype == bool
+    assert diagnostics["total_weight"].dtype == float
+    assert diagnostics["weighted_conversions"].dtype == float
+    row = diagnostics.iloc[0]
+    assert bool(row["weights_supplied"]) is True
+    np.testing.assert_allclose(
+        row["total_weight"], sum(STATIC_WEIGHTS), rtol=1e-10, atol=1e-12
+    )
+    np.testing.assert_allclose(
+        row["weighted_conversions"],
+        sum(w * y for w, y in zip(STATIC_WEIGHTS, STATIC_CONVERSIONS)),
+        rtol=1e-10,
+        atol=1e-12,
+    )
+    assert row["characteristic_function"] == characteristic_function
+    _assert_normalization_cells(row, result)
+
+
+def test_static_shapley_weighted_export_is_a_defensive_snapshot_of_the_fit():
+    weights = np.array(STATIC_WEIGHTS)
+    model, result = _fit_weighted_static_shapley(weights=weights)
+    reference = {
+        key: frame.to_csv(index=False) for key, frame in model.to_dataframes().items()
+    }
+
+    weights[:] = 99.0
+    result["shapley_values"]["Email"] = 99.0
+    result["value_function"].clear()
+    model.value_function.clear()
+    model.channels.append("Injected")
+
+    for key, frame in model.to_dataframes().items():
+        assert frame.to_csv(index=False) == reference[key], key
+
+
+def test_static_shapley_weight_columns_follow_each_successive_fit():
+    model, _ = _fit_weighted_static_shapley()
+    weighted = model.to_dataframes()
+    assert bool(weighted["fit_diagnostics"]["weights_supplied"].iloc[0]) is True
+    assert weighted["attribution"]["channel"].tolist() == STATIC_WEIGHTED_CHANNELS
+
+    # A rejected weighted refit leaves the last successful export in place.
+    with pytest.raises(ValueError, match="weights must be nonnegative"):
+        model.fit(STATIC_PATHS, STATIC_CONVERSIONS, weights=[-1.0] * len(STATIC_PATHS))
+    for key, frame in model.to_dataframes().items():
+        assert frame.to_csv(index=False) == weighted[key].to_csv(index=False), key
+
+    # An unweighted refit restores the unweighted export in full.
+    model.fit(STATIC_PATHS, STATIC_CONVERSIONS)
+    fresh, _ = _fit_static_shapley()
+    for key, frame in model.to_dataframes().items():
+        assert frame.to_csv(index=False) == fresh.to_dataframes()[key].to_csv(
+            index=False
+        ), key
+    row = model.to_dataframes()["fit_diagnostics"].iloc[0]
+    assert bool(row["weights_supplied"]) is False
+    assert row["total_weight"] == len(STATIC_PATHS)
+    assert row["weighted_conversions"] == sum(STATIC_CONVERSIONS)
+
+
+@pytest.mark.parametrize("weights", [None, [1.5, 2.5]])
+def test_static_shapley_no_channel_fit_exports_weight_columns(weights):
+    model = ShapleyAttribution(conversion_labels=["Purchase"])
+    if weights is None:
+        model.fit(["Purchase", "Purchase"], [1, 0])
+    else:
+        model.fit(["Purchase", "Purchase"], [1, 0], weights=weights)
+    diagnostics = model.to_dataframes()["fit_diagnostics"]
+
+    assert list(diagnostics.columns) == STATIC_SHAPLEY_DIAGNOSTIC_COLUMNS
+    row = diagnostics.iloc[0]
+    assert bool(row["weights_supplied"]) is (weights is not None)
+    assert row["total_weight"] == (2.0 if weights is None else 4.0)
+    assert row["weighted_conversions"] == (1.0 if weights is None else 1.5)
+    assert row["normalization_reason"] == "zero_raw_magnitude"
+
+
+def test_static_markov_export_schema_is_unchanged_by_the_shapley_weight_columns():
+    model = MarkovAttribution(
+        removal_strategy="redirect_to_null", conversion_labels=["Purchase"]
+    )
+    model.fit(STATIC_PATHS, STATIC_CONVERSIONS, weights=STATIC_WEIGHTS)
+    tables = model.to_dataframes()
+
+    assert list(tables.keys()) == STATIC_MARKOV_KEYS
+    assert list(tables["fit_diagnostics"].columns) == STATIC_MARKOV_DIAGNOSTIC_COLUMNS
+    assert not set(WEIGHT_COLUMNS) & set(tables["fit_diagnostics"].columns)
 
 
 def test_static_exact_game_shapley_exports_unavailable_shares_with_raw_values():

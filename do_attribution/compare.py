@@ -11,6 +11,7 @@ attribution distributions.
 from __future__ import annotations
 
 from typing import Any, Dict, Iterable, List, Optional, Sequence, Union
+import warnings
 
 import numpy as np
 import pandas as pd
@@ -19,7 +20,12 @@ from .base import BaseAttribution
 from .baselines import FirstTouchAttribution, LastTouchAttribution
 from .markov import MarkovAttribution
 from .shapley import ShapleyAttribution
-from .utils import DEFAULT_SEPARATOR, extract_channels
+from .utils import (
+    DEFAULT_SEPARATOR,
+    _validate_observation_weights,
+    extract_channels,
+    prepare_journey_data,
+)
 
 
 class CompareAttribution:
@@ -122,8 +128,35 @@ class CompareAttribution:
         self,
         paths: Union[Sequence[str], np.ndarray, pd.Series],
         conversions: Union[Sequence[int], np.ndarray, pd.Series],
+        weights: Optional[
+            Union[Sequence[float], np.ndarray, pd.Series]
+        ] = None,
     ) -> Dict[str, Dict[str, Any]]:
         """Fit every model and return their individual result dicts.
+
+        Parameters
+        ----------
+        paths : sequence of str
+            Channel paths.
+        conversions : sequence of int
+            Binary conversion outcomes aligned with ``paths``.
+        weights : sequence of float, optional
+            Per-journey observation weights: one-dimensional, aligned with
+            ``paths`` by position (a pandas Series' index labels are
+            ignored), finite, nonnegative, and with positive total weight.
+
+            When supplied, journeys with zero weight are dropped first and
+            the remaining journeys and their weights are passed to both
+            the Markov and the Shapley model, so the two are fitted on the
+            same weighted population and neither is fitted unweighted.  A
+            weighted comparison holds only those two models: the built-in
+            baselines and ``extra_models`` do not accept weights, so a
+            comparison constructed with ``include_baselines=True`` or with
+            ``extra_models`` raises ``ValueError`` before any model is
+            fitted.
+
+            ``None`` (the default) fits every model on the data as
+            supplied, exactly as before.
 
         Returns
         -------
@@ -133,7 +166,15 @@ class CompareAttribution:
             ``include_baselines=True``, plus any keys from
             ``extra_models``). Values are the raw result dicts returned by
             each model's own ``fit``.
+
+        Raises
+        ------
+        ValueError
+            If ``weights`` is supplied to a comparison that includes the
+            baselines or ``extra_models``, or if ``weights`` is invalid.
         """
+        if weights is not None:
+            return self._fit_weighted(paths, conversions, weights)
         # MODIFIED (P0): pass conversion_labels to extract_channels so the
         # endpoint tokens never show up in self.channels / attribution_frame.
         self.channels = extract_channels(
@@ -147,6 +188,48 @@ class CompareAttribution:
             self._results[name] = model.fit(paths, conversions)
         for name, model in self.extra_models.items():
             self._results[name] = model.fit(paths, conversions)
+        return self._results
+
+    def _fit_weighted(
+        self,
+        paths: Union[Sequence[str], np.ndarray, pd.Series],
+        conversions: Union[Sequence[int], np.ndarray, pd.Series],
+        weights: Union[Sequence[float], np.ndarray, pd.Series],
+    ) -> Dict[str, Dict[str, Any]]:
+        """Fit Markov and Shapley on one weighted, positive-weight population."""
+        unweighted_models = [*self.baselines, *self.extra_models]
+        if unweighted_models:
+            raise ValueError(
+                "A weighted comparison supports only the built-in Markov and "
+                "Shapley models. The baselines and extra_models do not accept "
+                "observation weights and would be fitted unweighted beside "
+                f"them: {unweighted_models}. Construct CompareAttribution "
+                "with include_baselines=False and without extra_models, or "
+                "call fit() without weights."
+            )
+        # Validate every supplied journey and weight before any row is
+        # dropped, so an invalid outcome on a zero-weight row is rejected.
+        # The empty-path notice is left to the two model fits below, which
+        # report it for the journeys they actually use.
+        with warnings.catch_warnings():
+            warnings.filterwarnings("ignore", message="Found .* empty paths")
+            paths_arr, conv_arr = prepare_journey_data(paths, conversions)
+        weights_arr = _validate_observation_weights(weights, len(paths_arr))
+
+        # One positional mask selects the journeys, outcomes, and weights
+        # both models are fitted on.
+        keep = weights_arr > 0
+        paths_arr = paths_arr[keep]
+        conv_arr = conv_arr[keep]
+        weights_arr = weights_arr[keep]
+
+        self.channels = extract_channels(
+            paths_arr, self.separator, conversion_labels=self.conversion_labels
+        )
+        self._results = {
+            "markov": self.markov.fit(paths_arr, conv_arr, weights=weights_arr),
+            "shapley": self.shapley.fit(paths_arr, conv_arr, weights=weights_arr),
+        }
         return self._results
 
     def attribution_frame(self) -> pd.DataFrame:

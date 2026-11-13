@@ -442,6 +442,46 @@ def prepare_journey_data(
     return paths_arr, conv_arr
 
 
+def _validate_observation_weights(
+    weights: Union[Sequence[float], np.ndarray, pd.Series],
+    n_observations: int,
+) -> np.ndarray:
+    """Validate per-journey observation weights and return them as floats.
+
+    Applies the weight contract of :meth:`MarkovAttribution.fit
+    <do_attribution.markov.MarkovAttribution.fit>`, check for check and
+    message for message, so the weighted Shapley and comparison paths accept
+    and reject exactly the inputs Markov does:
+
+    1. the weights are coerced with ``np.asarray(weights, dtype=float)``, so
+       a pandas Series is read positionally (its index labels are ignored)
+       and booleans become ``0.0`` / ``1.0``;
+    2. the result must be one-dimensional and as long as the observations;
+    3. every weight must be finite and nonnegative;
+    4. the total weight must be positive.
+
+    Raises
+    ------
+    ValueError
+        If any of the checks above fails.
+    """
+    weights_arr = np.asarray(weights, dtype=float)
+    if weights_arr.ndim != 1:
+        raise ValueError("weights must be one-dimensional")
+    if len(weights_arr) != n_observations:
+        raise ValueError(
+            f"Paths ({n_observations}) and weights "
+            f"({len(weights_arr)}) must have same length"
+        )
+    if not np.isfinite(weights_arr).all():
+        raise ValueError("weights must contain only finite values")
+    if (weights_arr < 0).any():
+        raise ValueError("weights must be nonnegative")
+    if float(weights_arr.sum()) <= 0.0:
+        raise ValueError("weights must have positive total weight")
+    return weights_arr
+
+
 def validate_data(
     paths: Union[Sequence[str], np.ndarray, pd.Series],
     conversions: Union[Sequence[int], np.ndarray, pd.Series],

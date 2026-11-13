@@ -146,3 +146,37 @@ def test_side_by_side_comparison_with_baselines_output() -> None:
         )
         assert line in README, line
     assert 'comparison.difference_frame("last_touch")' in README
+
+
+WEIGHTS = [2.5, 1.0, 1.0, 4.0, 0.5, 0.0, 2.0, 1.5, 1.0, 3.0]
+
+
+def test_weighted_shapley_example_output() -> None:
+    assert f"weights = {WEIGHTS}" in README
+    model = ShapleyAttribution(conversion_labels=["Purchase"])
+    result = model.fit(JOURNEYS, CONVERSIONS, weights=WEIGHTS)
+
+    leading = dict(list(result["value_function"].items())[:3])
+    assert f"# {str(leading)[:-1]}, ...}}" in README
+    assert f"# {_rounded(result['shapley_values'])}" in README
+    assert f"# {_rounded(result['attribution'])}" in README
+    assert result["raw_sum"] == pytest.approx(7.5)
+    assert 'weighted["raw_sum"]                  # 7.5' in README
+    # Direct is seen only on the zero-weight journey.
+    assert model.get_channels() == ["Email", "Search", "Social"]
+
+
+def test_weighted_side_by_side_comparison_output() -> None:
+    with warnings.catch_warnings():
+        # The default Markov strategy emits a one-time migration notice.
+        warnings.simplefilter("ignore", UserWarning)
+        comparison = CompareAttribution(conversion_labels=["Purchase"])
+        comparison.fit(JOURNEYS, CONVERSIONS, weights=WEIGHTS)
+
+    assert "comparison.fit(journeys, conversions, weights=weights)" in README
+    frame = comparison.attribution_frame()
+    assert list(frame.columns) == ["markov", "shapley"]
+    assert list(frame.index) == ["Email", "Search", "Social"]
+    for channel, row in frame.iterrows():
+        line = f"# {channel:<6}  {row['markov']:.6f}  {row['shapley']:.6f}"
+        assert line in README, line

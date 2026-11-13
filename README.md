@@ -535,6 +535,46 @@ codes are `zero_raw_magnitude`, `near_cancellation`, `nonfinite_result`,
 Attributed conversions are only defined when `attribution` is available;
 they are never derived from raw signed values.
 
+#### Observation weights
+
+`ShapleyAttribution.fit(..., weights=)` takes optional per-journey
+observation weights — frequencies when one row stands for several identical
+journeys, or survey and sampling weights. The coalition table becomes
+*R_w(T) = Σ wⱼ·Yⱼ over the journeys whose channel set is exactly T*, and
+both characteristic functions are evaluated on it as they are on *R(T)*.
+Weighted totals are floats and are never truncated to integers. Without
+`weights` nothing changes: the table holds integer counts.
+
+```python
+weights = [2.5, 1.0, 1.0, 4.0, 0.5, 0.0, 2.0, 1.5, 1.0, 3.0]
+
+weighted_model = ShapleyAttribution(conversion_labels=["Purchase"])
+weighted = weighted_model.fit(journeys, conversions, weights=weights)
+
+weighted["value_function"]
+# {('Email', 'Social'): 3.5, ('Email', 'Search'): 1.0, ('Social',): 1.0, ...}
+print({ch: round(v, 4) for ch, v in weighted["shapley_values"].items()})
+# {'Email': 2.9167, 'Search': 1.1667, 'Social': 3.4167}
+print({ch: round(share, 4) for ch, share in weighted["attribution"].items()})
+# {'Email': 0.3889, 'Search': 0.1556, 'Social': 0.4556}
+weighted["raw_sum"]                  # 7.5 — the weighted conversions
+```
+
+Weights follow the `MarkovAttribution.fit(weights=)` contract: one-dimensional,
+aligned with the journeys by position (the index labels of a pandas Series
+are ignored), finite, nonnegative, and with a positive total. Booleans count
+as `0` / `1`. A journey with zero weight is excluded before the channel list
+and the coalition table are built, so a channel seen only on zero-weight
+journeys — `Direct` above — is absent from every output. Standalone
+`MarkovAttribution` does not drop zero-weight journeys from its channel
+list. Integer frequency weights give the same result as repeating each
+journey that many times.
+
+Efficiency holds on the weighted table: under `"cumulative"` the raw values
+sum to the weighted conversions of every nonempty coalition, and under
+`"exact"` to `v_w(N)`. When no positively weighted journey converts,
+`attribution` is `None` with `normalization_reason="zero_raw_magnitude"`.
+
 ### Side-by-side comparison
 
 ```python
@@ -592,6 +632,24 @@ classes can also be used on their own or passed through `extra_models`.
 `extra_models={...}` plugs any additional `BaseAttribution` implementation
 into the same aligned tables, so a custom baseline can sit beside the
 built-in ones.
+
+`CompareAttribution.fit(..., weights=)` runs a weighted comparison.
+Zero-weight journeys are dropped first, and the remaining journeys and
+weights are passed to both models, so Markov and Shapley are always fitted
+on the same weighted population and neither is fitted unweighted. The
+baselines and `extra_models` do not accept weights: a weighted fit on a
+comparison built with `include_baselines=True` or with `extra_models` raises
+`ValueError` before any model is fitted.
+
+```python
+comparison = CompareAttribution(conversion_labels=["Purchase"])
+comparison.fit(journeys, conversions, weights=weights)
+
+comparison.attribution_frame()      #           markov   shapley
+                                    # Email   0.406250  0.388889
+                                    # Search  0.187500  0.155556
+                                    # Social  0.406250  0.455556
+```
 
 ### Conversion-endpoint declaration
 
@@ -690,6 +748,16 @@ keeps the signed diagnostics. The tables are copies of a snapshot taken at
 fit time: exporting never refits, and editing a returned frame changes
 neither the model nor a later export. Calling it before `fit` raises
 `RuntimeError`.
+
+The Shapley `fit_diagnostics` row ends with three observation-weight
+columns: `weights_supplied`, `total_weight` (the sum of the weights), and
+`weighted_conversions` (the sum of weight × outcome over every supplied
+journey). An unweighted fit records `False`, its journey count, and its
+conversion count. In `summary()`, the journey count, conversion count, and
+conversion rate stay plain counts of the rows passed to `fit`; a weighted
+fit adds an `Observation weights` section with the weighted totals, and its
+coalition tables show weighted conversions without rounding them to
+integers.
 
 ```python
 tables = model.to_dataframes()      # `model` is the quick-start MarkovAttribution

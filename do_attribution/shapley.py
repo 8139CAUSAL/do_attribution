@@ -36,6 +36,16 @@ The characteristic function ``v`` is selected by ``characteristic_function``:
     channel.  ``v(N)`` is zero on most real data, so the raw values cancel
     and no share vector exists.  Retained for backward compatibility and
     evaluated by direct enumeration with cached factorial weights.
+
+Optional per-journey observation weights ``w_j`` replace the coalition
+table with the weighted one,
+
+    R_w(T) = sum_{j : T_j = T}  w_j * Y_j
+
+where ``Y_j`` is journey ``j``'s binary outcome and ``T_j`` its channel set.
+Both games above are then evaluated on ``R_w`` exactly as they are on ``R``.
+Journeys with zero weight are excluded before the channel set ``N`` and the
+table are built.  Without weights the table holds integer counts, as before.
 """
 
 from __future__ import annotations
@@ -60,11 +70,13 @@ from .normalization import (  # MODIFIED: get-well Unit 1 — shared policy.
     normalize_signed_attribution,
 )
 from .reporting import (  # MODIFIED: distilled summary sections
+    build_observation_weight_section,
     build_path_diagnostics_section,
     build_shapley_detail_sections,
 )
 from .utils import (
     DEFAULT_SEPARATOR,
+    _validate_observation_weights,
     extract_channels,
     get_powerset,
     prepare_journey_data,
@@ -90,6 +102,23 @@ def _validate_characteristic_function(value: Any) -> str:
             f"{list(SHAPLEY_CHARACTERISTIC_FUNCTIONS)}, got {value!r}"
         )
     return value
+
+
+def _exact_sum(values: Iterable[float]) -> float:
+    """Exactly rounded sum that overflows to ``inf`` instead of raising.
+
+    :func:`math.fsum` raises ``OverflowError`` when finite terms sum past
+    the float range, which finite observation weights can do.  The terms
+    summed here are nonnegative, so that overflow is ``+inf``; the shared
+    normalizer then reports the fit as unavailable (``nonfinite_result``)
+    instead of the fit failing.  Every sum that stays in range is exactly
+    the :func:`math.fsum` result.
+    """
+    terms = list(values)
+    try:
+        return fsum(terms)
+    except OverflowError:
+        return float("inf")
 
 
 # MODIFIED (get-well Unit 1): rendering helpers for the normalization state.
@@ -160,12 +189,14 @@ class ShapleyAttribution(BaseAttribution):
     ----------
     channels : list[str]
         All user-visible channels observed across the paths (sorted).
-    value_function : dict[tuple[str, ...], int]
+    value_function : dict[tuple[str, ...], int | float]
         ``R(T)`` = total conversions for the subset of paths whose unique
         set of channels is exactly ``T``.  Coalition keys are sorted
         tuples.  Under ``'exact'`` this is ``v`` itself; under
         ``'cumulative'``, ``v(S)`` is the sum of these entries over every
-        observed coalition contained in ``S``.
+        observed coalition contained in ``S``.  The totals are integer
+        counts for an unweighted fit and floating-point weighted
+        conversions ``R_w(T)`` when ``fit`` is given ``weights``.
     """
 
     def __init__(
@@ -179,7 +210,7 @@ class ShapleyAttribution(BaseAttribution):
         self.characteristic_function: str = _validate_characteristic_function(
             characteristic_function
         )
-        self.value_function: Dict[Tuple[str, ...], int] = {}
+        self.value_function: Dict[Tuple[str, ...], Union[int, float]] = {}
         # Defensive copy of the last successful fit, read by to_dataframes().
         self._export_snapshot: Optional[Dict[str, Any]] = None
 
@@ -190,8 +221,36 @@ class ShapleyAttribution(BaseAttribution):
         self,
         paths: Union[Sequence[str], np.ndarray, pd.Series],
         conversions: Union[Sequence[int], np.ndarray, pd.Series],
+        weights: Optional[
+            Union[Sequence[float], np.ndarray, pd.Series]
+        ] = None,
     ) -> Dict[str, Any]:
         """Fit the Shapley model and return attribution + diagnostics.
+
+        Parameters
+        ----------
+        paths : sequence of str
+            Channel paths.
+        conversions : sequence of int
+            Binary conversion outcomes aligned with ``paths``.
+        weights : sequence of float, optional
+            Per-journey observation weights, validated exactly as
+            :meth:`MarkovAttribution.fit
+            <do_attribution.markov.MarkovAttribution.fit>` validates them:
+            one-dimensional, aligned with ``paths`` by position (a pandas
+            Series' index labels are ignored), finite, nonnegative, and
+            with positive total weight.  Booleans count as ``0`` / ``1``.
+
+            When supplied, the coalition table is the weighted
+            ``R_w(T) = sum of w_j * Y_j`` over the journeys whose channel
+            set is exactly ``T``, held as floats and never truncated, and
+            both characteristic functions are evaluated on it.  Journeys
+            with zero weight are excluded before the channel list and the
+            table are built, so a channel seen only on zero-weight journeys
+            appears in no output.
+
+            ``None`` (the default) fits every journey with unit weight and
+            keeps integer coalition totals, exactly as before.
 
         Returns
         -------
@@ -201,13 +260,15 @@ class ShapleyAttribution(BaseAttribution):
                 summing to 1, **or** ``None`` when normalization is
                 unavailable.  Always check before indexing.
               - ``'shapley_values'`` : dict[str, float] raw Shapley values
-                on the game's own scale (conversions).  Always present and
-                never rescaled by normalization.  Under ``'cumulative'``
-                they are non-negative and sum to the total observed
-                conversions; under ``'exact'`` they are signed diagnostics
-                — not shares, percentages, or probabilities.
+                on the game's own scale (conversions, or weighted
+                conversions when ``weights`` is supplied).  Always present
+                and never rescaled by normalization.  Under
+                ``'cumulative'`` they are non-negative and sum to the total
+                observed conversions; under ``'exact'`` they are signed
+                diagnostics — not shares, percentages, or probabilities.
               - ``'value_function'`` : dict[tuple, int] exact channel set
-                -> conversions (``R(T)``)
+                -> conversions (``R(T)``); float weighted conversions
+                (``R_w(T)``) when ``weights`` is supplied
               - ``'characteristic_function'`` : the game that was fitted
               - ``'normalization_status'``     : ``'available'`` or
                 ``'unavailable'``
@@ -233,10 +294,29 @@ class ShapleyAttribution(BaseAttribution):
 
         Attributed conversions must not be computed from ``attribution``
         unless ``normalization_status == 'available'``.
+
+        With ``weights``, efficiency holds on the weighted table: under
+        ``'cumulative'`` the raw values sum to the weighted conversions
+        ``R_w(T)`` over every credited nonempty coalition ``T``, and under
+        ``'exact'`` to ``v_w(N) - v_w(empty) = R_w(N)``.  Positive total
+        weight with no positively weighted conversion leaves normalization
+        unavailable (``zero_raw_magnitude``), as an unweighted fit with no
+        conversion does.
+
+        ``summary()`` keeps the observed journey count, conversion count,
+        and conversion rate as ordinary unweighted counts of the rows passed
+        to this call, zero-weight rows included.  The weighted totals are
+        reported separately, in their own summary section and in the
+        ``fit_diagnostics`` export.
         """
         # Shared preparation path: container shape and binary outcomes are
-        # validated on the supplied values, before any coercion.
+        # validated on the supplied values, before any coercion.  This runs
+        # on every supplied journey, so an invalid outcome on a zero-weight
+        # row is rejected rather than dropped with the row.
         paths_arr, conv_arr = prepare_journey_data(paths, conversions)
+        weights_supplied = weights is not None
+        if weights_supplied:
+            weights_arr = _validate_observation_weights(weights, len(paths_arr))
         # MODIFIED (P0): strip conversion-endpoint tokens up front so no
         # downstream code path — channel enumeration, coalition keys, value
         # function lookups, attribution normalisation — ever sees them.
@@ -244,7 +324,31 @@ class ShapleyAttribution(BaseAttribution):
             paths_arr = strip_conversion_labels_array(
                 paths_arr, self.conversion_labels, self.separator
             )
-        self.channels = extract_channels(paths_arr, self.separator)
+
+        # ``paths_arr`` / ``conv_arr`` stay the supplied rows and feed the
+        # observed counts.  ``fit_*`` are the rows the game is built from:
+        # all of them without weights, the positive-weight ones with.
+        if weights_supplied:
+            keep = weights_arr > 0
+            fit_paths = paths_arr[keep]
+            fit_conv = conv_arr[keep]
+            fit_weights: Optional[np.ndarray] = weights_arr[keep]
+            total_weight = _exact_sum(fit_weights.tolist())
+            weighted_conversions = _exact_sum((fit_weights * fit_conv).tolist())
+            weight_details: tuple = (
+                build_observation_weight_section(
+                    total_weight=total_weight,
+                    weighted_conversions=weighted_conversions,
+                    zero_weight_count=len(paths_arr) - int(keep.sum()),
+                ),
+            )
+        else:
+            fit_paths, fit_conv, fit_weights = paths_arr, conv_arr, None
+            total_weight = float(len(paths_arr))
+            weighted_conversions = float(conv_arr.sum())
+            weight_details = ()
+
+        self.channels = extract_channels(fit_paths, self.separator)
         n = len(self.channels)
 
         if n == 0:
@@ -265,14 +369,24 @@ class ShapleyAttribution(BaseAttribution):
             self._store_static_reporting(
                 paths_arr,
                 conv_arr,
+                model_details=weight_details,
                 attribution_note=_normalization_note(normalization),
             )
-            self._store_export_snapshot({}, normalization)
+            self._store_export_snapshot(
+                {},
+                normalization,
+                weights_supplied=weights_supplied,
+                total_weight=total_weight,
+                weighted_conversions=weighted_conversions,
+            )
             return result
 
         # 1. Observed coalition conversion table  R(T) = sum of conversions
-        #    for paths whose unique channel-set is exactly T.
-        self.value_function = self._calculate_value_function(paths_arr, conv_arr)
+        #    for paths whose unique channel-set is exactly T; with weights,
+        #    R_w(T) = sum of weight * conversion over those paths.
+        self.value_function = self._calculate_value_function(
+            fit_paths, fit_conv, fit_weights
+        )
 
         # 2-3. Raw Shapley values on the configured coalition game.
         if self.characteristic_function == "cumulative":
@@ -323,10 +437,17 @@ class ShapleyAttribution(BaseAttribution):
         # MODIFIED: distilled model-specific sections for summary()/report()
         # — signed raw Shapley values, top coalitions, single-channel
         # baselines, and scalable path diagnostics. Never the 2^C space.
-        details = build_shapley_detail_sections(
-            shapley_values=shapley_values,
-            value_function=self.value_function,
-        ) + (build_path_diagnostics_section(paths_arr, self.separator),)
+        # A weighted fit leads with its weighted totals, kept apart from the
+        # observed counts, and distills only the journeys it was built from.
+        details = (
+            weight_details
+            + build_shapley_detail_sections(
+                shapley_values=shapley_values,
+                value_function=self.value_function,
+                weighted=weights_supplied,
+            )
+            + (build_path_diagnostics_section(fit_paths, self.separator),)
+        )
         # MODIFIED (get-well Unit 1): make the normalization state an
         # explicit, visible section of the rendered summary.
         details = details + (_normalization_section(normalization),)
@@ -336,7 +457,13 @@ class ShapleyAttribution(BaseAttribution):
             model_details=details,
             attribution_note=_normalization_note(normalization),
         )
-        self._store_export_snapshot(shapley_values, normalization)
+        self._store_export_snapshot(
+            shapley_values,
+            normalization,
+            weights_supplied=weights_supplied,
+            total_weight=total_weight,
+            weighted_conversions=weighted_conversions,
+        )
         return result
 
     def to_dataframes(self) -> Dict[str, pd.DataFrame]:
@@ -366,7 +493,13 @@ class ShapleyAttribution(BaseAttribution):
               diagnostics ``normalization_status``,
               ``normalization_reason``, ``normalization_denominator``,
               ``raw_sum``, ``raw_magnitude``, and ``cancellation_ratio``
-              (``NaN`` where the fit recorded ``None``).
+              (``NaN`` where the fit recorded ``None``), followed by the
+              observation-weight columns ``weights_supplied`` (``True`` when
+              ``fit`` was given ``weights``), ``total_weight`` (the sum of
+              the observation weights), and ``weighted_conversions`` (the
+              sum of ``weight * outcome`` over every supplied journey).  For
+              an unweighted fit these are ``False``, the journey count, and
+              the conversion count.
 
             Every frame is a new flat copy with a fresh ``RangeIndex`` and
             one scalar per cell.  Channels are ``str`` and in sorted order.
@@ -398,12 +531,20 @@ class ShapleyAttribution(BaseAttribution):
         self,
         shapley_values: Dict[str, float],
         normalization: NormalizationResult,
+        *,
+        weights_supplied: bool,
+        total_weight: float,
+        weighted_conversions: float,
     ) -> None:
         """Keep copies of this fit's outputs and settings for to_dataframes().
 
         Storing copies means later mutation of the returned result, the
         model attributes, or an exported frame cannot change an export, and
         exporting never needs to refit or enumerate coalitions.
+
+        The three observation-weight cells close the diagnostics row for
+        every fit; an unweighted fit records ``False`` with its journey and
+        conversion counts.
         """
         attribution = normalization.attribution
         self._export_snapshot = {
@@ -416,8 +557,12 @@ class ShapleyAttribution(BaseAttribution):
                 ("conversion_labels", conversion_labels_cell(self.conversion_labels)),
                 ("characteristic_function", self.characteristic_function),
                 *normalization_columns(normalization.diagnostics()),
+                ("weights_supplied", bool(weights_supplied)),
+                ("total_weight", float(total_weight)),
+                ("weighted_conversions", float(weighted_conversions)),
             ),
         }
+
     def _cumulative_shapley_values(self) -> Dict[str, float]:
         """Shapley values of ``v(S) = sum_{T subset of S} R(T)``.
 
@@ -445,7 +590,7 @@ class ShapleyAttribution(BaseAttribution):
             credit = conversions / len(members)
             for ch in members:
                 terms[ch].append(credit)
-        return {ch: fsum(parts) for ch, parts in terms.items()}
+        return {ch: _exact_sum(parts) for ch, parts in terms.items()}
 
     def _exact_set_shapley_values(self) -> Dict[str, float]:
         """Shapley values of the legacy game ``v(S) = R(S)``."""
@@ -480,17 +625,44 @@ class ShapleyAttribution(BaseAttribution):
         self,
         paths: np.ndarray,
         conversions: np.ndarray,
-    ) -> Dict[Tuple[str, ...], int]:
-        """R(T) = total conversions whose *unique* channel set equals T."""
-        coalition_map: Dict[Tuple[str, ...], int] = {}
-        for path, conv in zip(paths, conversions):
+        weights: Optional[np.ndarray] = None,
+    ) -> Dict[Tuple[str, ...], Union[int, float]]:
+        """R(T) = total conversions whose *unique* channel set equals T.
+
+        Without ``weights`` the totals are integer counts.  With ``weights``
+        they are ``R_w(T) = sum of weight * conversion`` over the same
+        paths, accumulated as floats: each coalition's contributions are
+        combined with an exactly rounded sum (:func:`_exact_sum`), so
+        nothing is cast to an integer and the total does not depend on
+        journey order.
+        """
+        if weights is None:
+            coalition_map: Dict[Tuple[str, ...], int] = {}
+            for path, conv in zip(paths, conversions):
+                channels = tuple(
+                    sorted(set(split_path(str(path), self.separator)))
+                )
+                if not channels:
+                    continue
+                coalition_map[channels] = coalition_map.get(channels, 0) + int(conv)
+            return coalition_map
+
+        contributions: Dict[Tuple[str, ...], List[float]] = {}
+        for path, conv, weight in zip(paths, conversions, weights):
             channels = tuple(
                 sorted(set(split_path(str(path), self.separator)))
             )
             if not channels:
                 continue
-            coalition_map[channels] = coalition_map.get(channels, 0) + int(conv)
-        return coalition_map
+            # Every observed coalition keeps its key, as in the unweighted
+            # table; only converting journeys contribute weight to it.
+            parts = contributions.setdefault(channels, [])
+            if conv:
+                parts.append(float(weight))
+        return {
+            coalition: _exact_sum(parts)
+            for coalition, parts in contributions.items()
+        }
 
 
 __all__ = ["ShapleyAttribution", "SHAPLEY_CHARACTERISTIC_FUNCTIONS"]

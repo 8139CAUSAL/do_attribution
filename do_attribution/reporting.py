@@ -148,25 +148,89 @@ def build_markov_detail_sections(
     return tuple(sections)
 
 
+def _weighted_total(value: object) -> str:
+    """Render a weighted total without truncating its fractional part.
+
+    An integer-valued total prints in full, exactly as an unweighted count
+    does.  Any other value prints to six significant digits, so a fractional
+    total keeps its fraction and a small nonzero total is never shown as
+    zero.
+    """
+    number = float(value)
+    if number.is_integer() and abs(number) < 1e15:
+        return str(int(number))
+    return f"{number:.6g}"
+
+
+def _signed_weighted(value: object) -> str:
+    """Render a signed raw value from a weighted fit.
+
+    Uses the standard four-decimal rendering unless that would print a
+    nonzero value as zero, in which case six significant digits are shown.
+    """
+    number = float(value)
+    text = _signed(number)
+    if number != 0.0 and float(text) == 0.0:
+        return f"{number:+.6g}"
+    return text
+
+
+def build_observation_weight_section(
+    *,
+    total_weight: float,
+    weighted_conversions: float,
+    zero_weight_count: int,
+) -> tuple:
+    """Weighted totals of an explicitly weighted fit, as their own section.
+
+    Kept apart from the observed journey and conversion counts, which stay
+    ordinary unweighted counts of the supplied rows.  ``weighted_conversions``
+    is the sum of ``weight * outcome`` over every supplied journey, so it
+    includes conversions on paths with no channel and need not equal the
+    conversions a model credits to channels.
+    """
+
+    return (
+        "Observation weights",
+        ("Metric", "Value"),
+        (
+            ("Total observation weight", _weighted_total(total_weight)),
+            ("Weighted conversions", _weighted_total(weighted_conversions)),
+            ("Zero-weight journeys excluded", str(int(zero_weight_count))),
+        ),
+    )
+
+
 def build_shapley_detail_sections(
     *,
     shapley_values: Mapping[str, float],
-    value_function: Mapping[tuple, int],
+    value_function: Mapping[tuple, float],
     max_coalitions: int = 5,
     max_channels: int = 10,
+    weighted: bool = False,
 ) -> tuple:
     """MODIFIED: distilled static-Shapley mechanics for the text renderer.
 
     The 2^C coalition space is summarised as the top coalitions by value
     plus the single-channel baselines; raw Shapley values are shown signed.
+
+    ``weighted=True`` marks a fit with explicit observation weights, whose
+    coalition totals are weighted conversions and may be fractional.  They
+    are then labelled as weighted and rendered without integer truncation,
+    and a small nonzero raw value is never printed as zero.  The default
+    renders an unweighted fit exactly as before.
     """
+
+    signed = _signed_weighted if weighted else _signed
+    total = _weighted_total if weighted else (lambda value: str(int(value)))
+    conversions_label = "Weighted conversions" if weighted else "Conversions"
 
     sections: list = []
     ranked_values = sorted(
         shapley_values.items(), key=lambda item: (-abs(item[1]), item[0])
     )
     value_rows = [
-        (str(channel), _signed(value)) for channel, value in ranked_values[:max_channels]
+        (str(channel), signed(value)) for channel, value in ranked_values[:max_channels]
     ]
     if len(ranked_values) > max_channels:
         value_rows.append((f"({len(ranked_values) - max_channels} more channels)", ""))
@@ -179,15 +243,19 @@ def build_shapley_detail_sections(
         key=lambda item: (-item[1], " + ".join(map(str, item[0]))),
     )
     coalition_rows = [
-        (" + ".join(map(str, coalition)), str(int(value)))
+        (" + ".join(map(str, coalition)), total(value))
         for coalition, value in coalitions[:max_coalitions]
         if value > 0
     ]
     if coalition_rows:
         sections.append(
             (
-                "Top coalitions by conversions",
-                ("Coalition", "Conversions"),
+                (
+                    "Top coalitions by weighted conversions"
+                    if weighted
+                    else "Top coalitions by conversions"
+                ),
+                ("Coalition", conversions_label),
                 tuple(coalition_rows),
             )
         )
@@ -200,13 +268,13 @@ def build_shapley_detail_sections(
         key=lambda item: (-item[1], item[0]),
     )
     single_rows = [
-        (str(channel), str(int(value))) for channel, value in singles[:max_channels]
+        (str(channel), total(value)) for channel, value in singles[:max_channels]
     ]
     if single_rows:
         sections.append(
             (
                 "Single-channel baselines v({c})",
-                ("Channel", "Conversions"),
+                ("Channel", conversions_label),
                 tuple(single_rows),
             )
         )
@@ -870,6 +938,7 @@ __all__ = [
     # MODIFIED: distilled model-specific section builders.
     "build_markov_detail_sections",
     "build_shapley_detail_sections",
+    "build_observation_weight_section",
     "build_path_diagnostics_section",
     "build_markov_epoch_effect_section",
     "build_shapley_epoch_coalition_section",

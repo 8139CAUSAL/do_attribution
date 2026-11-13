@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import warnings
 
+import numpy as np
+import pandas as pd
 import pytest
 
 from do_attribution import (
@@ -389,3 +391,364 @@ def test_compare_conversion_label_collision_rejected():
     # Collision is caught at sub-model construction.
     with pytest.raises(ValueError, match="SPECIAL_TOKENS"):
         CompareAttribution(conversion_labels=["START"])
+
+
+# --------------------------------------------------------------------------- #
+# Weighted comparisons                                                         #
+# --------------------------------------------------------------------------- #
+# fit(..., weights=w) drops zero-weight journeys once and hands the same
+# retained journeys and weights to both models, so a weighted Markov column
+# is never compared with an unweighted Shapley column or the reverse.
+RTOL = 1e-10
+ATOL = 1e-12
+
+# "Ghost" is seen only on the two zero-weight journeys.
+WEIGHTED_PATHS = ["A", "A > B", "B > A", "C", "Ghost > A", "A > B > C", "Ghost"]
+WEIGHTED_CONVERSIONS = [1, 1, 0, 1, 1, 1, 0]
+WEIGHTED_WEIGHTS = [0.5, 1.25, 3.0, 2.0, 0.0, 0.75, 0.0]
+RETAINED = [0, 1, 2, 3, 5]
+
+
+def _quiet_fit(cmp_, *args, **kwargs):
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", UserWarning)
+        return cmp_.fit(*args, **kwargs)
+
+
+def _record_fit_calls(monkeypatch, model):
+    """Record every fit call on ``model`` while still running the real fit."""
+    calls = []
+    real_fit = model.fit
+
+    def recording_fit(*args, **kwargs):
+        calls.append((args, kwargs))
+        return real_fit(*args, **kwargs)
+
+    monkeypatch.setattr(model, "fit", recording_fit)
+    return calls
+
+
+def _assert_frames_close(actual, expected):
+    assert list(actual.columns) == list(expected.columns)
+    assert list(actual.index) == list(expected.index)
+    np.testing.assert_allclose(
+        actual.to_numpy(dtype=float),
+        expected.to_numpy(dtype=float),
+        rtol=RTOL,
+        atol=ATOL,
+        equal_nan=True,
+    )
+
+
+def test_weighted_comparison_passes_identical_retained_inputs_to_both_models(
+    monkeypatch,
+):
+    cmp_ = CompareAttribution(markov_removal_strategy="redirect_to_null")
+    markov_calls = _record_fit_calls(monkeypatch, cmp_.markov)
+    shapley_calls = _record_fit_calls(monkeypatch, cmp_.shapley)
+
+    results = cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, weights=WEIGHTED_WEIGHTS)
+
+    assert list(results) == ["markov", "shapley"]
+    assert len(markov_calls) == len(shapley_calls) == 1
+    (markov_args, markov_kwargs), (shapley_args, shapley_kwargs) = (
+        markov_calls[0],
+        shapley_calls[0],
+    )
+    # Both models receive explicit weights: neither is fitted unweighted.
+    assert set(markov_kwargs) == set(shapley_kwargs) == {"weights"}
+    expected = (
+        [WEIGHTED_PATHS[i] for i in RETAINED],
+        [WEIGHTED_CONVERSIONS[i] for i in RETAINED],
+        [WEIGHTED_WEIGHTS[i] for i in RETAINED],
+    )
+    for args, kwargs in ((markov_args, markov_kwargs), (shapley_args, shapley_kwargs)):
+        assert len(args) == 2
+        assert list(args[0]) == expected[0]
+        assert list(args[1]) == expected[1]
+        assert list(kwargs["weights"]) == expected[2]
+    # Identical inputs, element for element.
+    assert list(markov_args[0]) == list(shapley_args[0])
+    assert list(markov_args[1]) == list(shapley_args[1])
+    assert list(markov_kwargs["weights"]) == list(shapley_kwargs["weights"])
+
+    # The zero-weight-only channel is in no model and not in the comparison.
+    assert cmp_.channels == ["A", "B", "C"]
+    assert cmp_.markov.get_channels() == cmp_.shapley.get_channels() == ["A", "B", "C"]
+    frame = cmp_.attribution_frame()
+    assert list(frame.columns) == ["markov", "shapley"]
+    assert list(frame.index) == ["A", "B", "C"]
+    assert cmp_.unavailable_models() == {}
+    for column in frame.columns:
+        assert frame[column].sum() == pytest.approx(1.0)
+
+
+def test_weighted_comparison_equals_the_standalone_weighted_fits():
+    cmp_ = CompareAttribution(markov_removal_strategy="redirect_to_null")
+    results = cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, weights=WEIGHTED_WEIGHTS)
+
+    retained = (
+        [WEIGHTED_PATHS[i] for i in RETAINED],
+        [WEIGHTED_CONVERSIONS[i] for i in RETAINED],
+    )
+    retained_weights = [WEIGHTED_WEIGHTS[i] for i in RETAINED]
+    markov = MarkovAttribution(removal_strategy="redirect_to_null").fit(
+        *retained, weights=retained_weights
+    )
+    # Standalone Shapley drops the zero-weight journeys itself.
+    shapley = ShapleyAttribution().fit(
+        WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, weights=WEIGHTED_WEIGHTS
+    )
+
+    for name, standalone, raw_key in (
+        ("markov", markov, "removal_effects"),
+        ("shapley", shapley, "shapley_values"),
+    ):
+        for key in ("attribution", raw_key):
+            assert set(results[name][key]) == set(standalone[key]) == {"A", "B", "C"}
+            np.testing.assert_allclose(
+                [results[name][key][c] for c in "ABC"],
+                [standalone[key][c] for c in "ABC"],
+                rtol=RTOL,
+                atol=ATOL,
+            )
+    # Fractional weighted coalition totals reach the comparison untruncated.
+    assert results["shapley"]["value_function"][("A", "B")] == pytest.approx(1.25)
+
+
+@pytest.mark.parametrize("removal_strategy", ["fail", "redirect_to_null"])
+@pytest.mark.parametrize("characteristic_function", ["cumulative", "exact"])
+def test_unit_weighted_comparison_matches_the_unweighted_comparison(
+    removal_strategy, characteristic_function, example_paths, example_conversions
+):
+    def comparison():
+        return CompareAttribution(
+            markov_removal_strategy=removal_strategy,
+            conversion_labels=["Purchase"],
+            shapley_characteristic_function=characteristic_function,
+        )
+
+    plain, unit = comparison(), comparison()
+    _quiet_fit(plain, example_paths, example_conversions)
+    _quiet_fit(
+        unit, example_paths, example_conversions, weights=[1.0] * len(example_paths)
+    )
+
+    assert unit.channels == plain.channels
+    assert unit.unavailable_models() == plain.unavailable_models()
+    _assert_frames_close(unit.attribution_frame(), plain.attribution_frame())
+    _assert_frames_close(
+        unit.difference_frame("markov"), plain.difference_frame("markov")
+    )
+
+
+@pytest.mark.parametrize("removal_strategy", ["fail", "redirect_to_null"])
+def test_frequency_weighted_comparison_matches_replicated_journeys(removal_strategy):
+    paths = ["A", "A > B", "B > A", "C", "A > B > C", "Z > A", "B", "Z"]
+    conversions = [1, 1, 0, 1, 1, 1, 0, 0]
+    frequencies = [3, 2, 4, 1, 2, 0, 5, 0]
+    replicated_paths, replicated_conversions = [], []
+    for path, converted, frequency in zip(paths, conversions, frequencies):
+        replicated_paths.extend([path] * frequency)
+        replicated_conversions.extend([converted] * frequency)
+
+    weighted = CompareAttribution(markov_removal_strategy=removal_strategy)
+    replicated = CompareAttribution(markov_removal_strategy=removal_strategy)
+    _quiet_fit(weighted, paths, conversions, weights=frequencies)
+    _quiet_fit(replicated, replicated_paths, replicated_conversions)
+
+    # Z is seen only on zero-frequency journeys: absent from both sides.
+    assert weighted.channels == replicated.channels == ["A", "B", "C"]
+    assert weighted.unavailable_models() == replicated.unavailable_models() == {}
+    _assert_frames_close(weighted.attribution_frame(), replicated.attribution_frame())
+    _assert_frames_close(
+        weighted.difference_frame("markov"), replicated.difference_frame("markov")
+    )
+
+
+def test_weighted_comparison_accepts_series_and_aligns_weights_by_position():
+    expected = CompareAttribution(markov_removal_strategy="redirect_to_null")
+    expected.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, weights=WEIGHTED_WEIGHTS)
+
+    n = len(WEIGHTED_PATHS)
+    cmp_ = CompareAttribution(markov_removal_strategy="redirect_to_null")
+    cmp_.fit(
+        pd.Series(WEIGHTED_PATHS, index=range(50, 50 + n)),
+        pd.Series(WEIGHTED_CONVERSIONS),
+        # Label alignment would reverse these weights; position must win.
+        weights=pd.Series(WEIGHTED_WEIGHTS, index=range(n - 1, -1, -1)),
+    )
+    assert cmp_.channels == expected.channels
+    _assert_frames_close(cmp_.attribution_frame(), expected.attribution_frame())
+
+
+def test_weighted_comparison_strips_conversion_labels(
+    example_paths, example_conversions
+):
+    # Zero weight on "Direct > Purchase", the only journey touching Direct.
+    weights = [2.5, 1.0, 1.0, 4.0, 0.5, 0.0, 2.0, 1.5, 1.0, 3.0]
+    cmp_ = CompareAttribution(conversion_labels=["Purchase"])
+    results = _quiet_fit(cmp_, example_paths, example_conversions, weights=weights)
+
+    assert cmp_.channels == ["Email", "Search", "Social"]
+    frame = cmp_.attribution_frame()
+    assert list(frame.index) == ["Email", "Search", "Social"]
+    for name in ("markov", "shapley"):
+        assert "Purchase" not in results[name]["attribution"]
+        assert "Direct" not in results[name]["attribution"]
+    assert all(
+        "Purchase" not in coalition
+        for coalition in results["shapley"]["value_function"]
+    )
+
+
+def _two_argument_model():
+    class TwoArgumentModel(BaseAttribution):
+        """A custom model with the unchanged two-argument fit interface."""
+
+        def fit(self, paths, conversions):
+            self.channels = ["A"]
+            self._last_attribution = {"A": 1.0}
+            return {"attribution": dict(self._last_attribution)}
+
+    return TwoArgumentModel()
+
+
+@pytest.mark.parametrize(
+    ("kwargs", "named"),
+    [
+        ({"include_baselines": True}, ["first_touch", "last_touch"]),
+        ({"extra_models": "custom"}, ["custom"]),
+        (
+            {"include_baselines": True, "extra_models": "custom"},
+            ["first_touch", "last_touch", "custom"],
+        ),
+    ],
+)
+def test_weighted_comparison_rejects_baselines_and_extra_models_before_fitting(
+    monkeypatch, kwargs, named
+):
+    kwargs = dict(kwargs)
+    if "extra_models" in kwargs:
+        kwargs["extra_models"] = {"custom": _two_argument_model()}
+    cmp_ = CompareAttribution(markov_removal_strategy="redirect_to_null", **kwargs)
+    calls = {
+        name: _record_fit_calls(monkeypatch, model)
+        for name, model in {
+            "markov": cmp_.markov,
+            "shapley": cmp_.shapley,
+            **cmp_.baselines,
+            **cmp_.extra_models,
+        }.items()
+    }
+
+    with pytest.raises(ValueError) as error:
+        cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, weights=WEIGHTED_WEIGHTS)
+
+    message = str(error.value)
+    assert "weighted comparison supports only the built-in Markov and Shapley" in message
+    assert str(named) in message
+    # Actionable: it says how to get a valid weighted comparison.
+    assert "include_baselines=False" in message
+    assert "without extra_models" in message
+    # No model was fitted and no comparison state was written.
+    assert all(not model_calls for model_calls in calls.values())
+    assert cmp_.channels == []
+    with pytest.raises(ValueError, match="Call fit"):
+        cmp_.get_results()
+
+    # The same comparison still fits unweighted, calling every model with the
+    # unchanged two-argument interface.
+    results = cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS)
+    assert list(results) == ["markov", "shapley", *named]
+    for model_calls in calls.values():
+        assert len(model_calls) == 1
+        args, call_kwargs = model_calls[0]
+        assert len(args) == 2 and call_kwargs == {}
+
+
+def test_rejected_weighted_comparison_keeps_the_previous_results():
+    cmp_ = CompareAttribution(
+        markov_removal_strategy="redirect_to_null", include_baselines=True
+    )
+    cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS)
+    before = cmp_.attribution_frame()
+
+    with pytest.raises(ValueError, match="weighted comparison supports only"):
+        cmp_.fit(["X", "Y"], [1, 0], weights=[1.0, 2.0])
+
+    assert cmp_.channels == ["A", "B", "C", "Ghost"]
+    assert cmp_.attribution_frame().equals(before)
+
+
+@pytest.mark.parametrize(
+    ("weights", "message"),
+    [
+        ([1.0] * 3, "must have same length"),
+        ([[1.0] * 7], "weights must be one-dimensional"),
+        ([1.0, float("nan")] + [1.0] * 5, "weights must contain only finite values"),
+        ([1.0, -1.0] + [1.0] * 5, "weights must be nonnegative"),
+        ([0.0] * 7, "weights must have positive total weight"),
+    ],
+)
+def test_weighted_comparison_rejects_invalid_weights_before_fitting(
+    monkeypatch, weights, message
+):
+    cmp_ = CompareAttribution(markov_removal_strategy="redirect_to_null")
+    markov_calls = _record_fit_calls(monkeypatch, cmp_.markov)
+    shapley_calls = _record_fit_calls(monkeypatch, cmp_.shapley)
+
+    with pytest.raises(ValueError, match=message):
+        cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, weights=weights)
+
+    assert markov_calls == [] and shapley_calls == []
+    assert cmp_.channels == []
+
+
+def test_weighted_comparison_validates_outcomes_on_zero_weight_rows(monkeypatch):
+    cmp_ = CompareAttribution(markov_removal_strategy="redirect_to_null")
+    markov_calls = _record_fit_calls(monkeypatch, cmp_.markov)
+    shapley_calls = _record_fit_calls(monkeypatch, cmp_.shapley)
+
+    with pytest.raises(ValueError, match=r"index 1 must be 0 or 1, got 0\.5$"):
+        cmp_.fit(["A", "B"], [1, 0.5], weights=[1.0, 0.0])
+
+    assert markov_calls == [] and shapley_calls == []
+
+
+@pytest.mark.parametrize(
+    "removal_strategy", ["fail", "fail_refit", "detour", "redirect_to_null"]
+)
+def test_weighted_comparison_without_weighted_conversions_is_unavailable(
+    removal_strategy,
+):
+    """Positive total weight, but every converting journey has weight 0."""
+    cmp_ = CompareAttribution(markov_removal_strategy=removal_strategy)
+    _quiet_fit(cmp_, ["A", "B", "A > B"], [0, 0, 1], weights=[2.0, 3.0, 0.0])
+
+    assert cmp_.unavailable_models() == {
+        "markov": "zero_raw_magnitude",
+        "shapley": "zero_raw_magnitude",
+    }
+    frame = cmp_.attribution_frame()
+    assert list(frame.columns) == ["markov", "shapley"]
+    assert list(frame.index) == ["A", "B"]
+    assert frame.isna().all().all()
+    assert cmp_.difference_frame("markov")["shapley_minus_markov"].isna().all()
+
+
+def test_unweighted_comparison_calls_the_models_without_weights(monkeypatch):
+    cmp_ = CompareAttribution(markov_removal_strategy="redirect_to_null")
+    markov_calls = _record_fit_calls(monkeypatch, cmp_.markov)
+    shapley_calls = _record_fit_calls(monkeypatch, cmp_.shapley)
+
+    cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS)
+    cmp_.fit(WEIGHTED_PATHS, WEIGHTED_CONVERSIONS, weights=None)
+
+    for calls in (markov_calls, shapley_calls):
+        assert len(calls) == 2
+        for args, kwargs in calls:
+            # The caller's own containers, passed through untouched.
+            assert args == (WEIGHTED_PATHS, WEIGHTED_CONVERSIONS)
+            assert kwargs == {}
+    assert cmp_.channels == ["A", "B", "C", "Ghost"]
