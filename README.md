@@ -277,8 +277,8 @@ distinct.
 | :---: | :---: |
 | <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/calibration_static_effects.png" width="420" alt="Static calibration effects"> | <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/calibration_temporal_epoch_alignment.png" width="420" alt="Temporal epoch and experiment alignment"> |
 | Decomposes the calibrated estimate into original attribution, direct test adjustment, and residual allocation | Shows where experimental evidence falls on caller-defined epochs without redefining the epoch boundaries |
-| <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/calibration_temporal_ratio_schedule.png" width="420" alt="Temporal ratio schedule"> | <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/calibration_temporal_residual_allocation.png" width="420" alt="Temporal residual allocation"> |
-| Distinguishes observed experimental anchors from constructed epoch-level calibration ratios | Shows the required residual adjustment and its policy-based allocation across eligible recipients |
+| <img src="https://raw.githubusercontent.com/8139CAUSAL/do_attribution/main/examples/images/calibration_temporal_residual_allocation.png" width="420" alt="Temporal residual allocation"> | |
+| Shows the required residual adjustment and its policy-based allocation across eligible recipients | |
 
 ---
 
