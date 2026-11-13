@@ -60,6 +60,5 @@ addopts = "-ra -q"
 filterwarnings = [
     # Suppress the deliberate "empty path" warnings emitted during validation.
     "ignore:Found .* empty paths",
-    "ignore:Total removal effect is 0",
     "ignore:Total Shapley value is zero",
 ]
