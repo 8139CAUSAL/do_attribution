@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "do-attribution"
-version = "0.0.2"
+version = "0.0.3"
 description = "Unified multi-touch attribution library (Markov chain + Shapley value)."
 readme = "README.md"
 requires-python = ">=3.11"
